@@ -848,6 +848,9 @@ void OptionsDialog::loadConnectionTabOptions()
     m_ui->checkUPnP->setChecked(Net::PortForwarder::instance()->isEnabled());
 
     m_ui->groupStun->setChecked(session->isStunEnabled());
+    m_ui->textStunServers->setPlaceholderText(BitTorrent::StunNatTraversal::defaultServers().join(u'\n'));
+    m_ui->textStunServers->setToolTip(tr("Leave empty to use the default servers:\n%1")
+        .arg(BitTorrent::StunNatTraversal::defaultServers().join(u'\n')));
     m_ui->textStunServers->setPlainText(session->stunServers().join(u'\n'));
     m_ui->spinStunInterval->setValue(session->stunCheckInterval());
     m_ui->checkStunAnnouncePort->setChecked(session->isStunAnnouncePortEnabled());

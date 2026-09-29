@@ -140,13 +140,13 @@ BitTorrent::StunNatTraversal::~StunNatTraversal()
 QStringList BitTorrent::StunNatTraversal::defaultServers()
 {
     return {
-        // UDP only servers (widely reachable in mainland China)
+        // Primary servers (UDP + TCP, reachable from mainland China)
         u"stun.miwifi.com:3478"_s,
         u"stun.chat.bilibili.com:3478"_s,
-        // UDP + TCP servers (TCP is required for mapping the TCP listening port)
+        u"stun.l.google.com:19302"_s,
+        // Fallback servers (UDP + TCP)
         u"turn.cloudflare.com:3478"_s,
-        u"stun.nextcloud.com:3478"_s,
-        u"stun.l.google.com:19302"_s
+        u"stun.nextcloud.com:3478"_s
     };
 }
 
