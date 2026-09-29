@@ -45,3 +45,4 @@ src/icons/skin/build-icons/icons/*.png
 build/
 
 /.idea/*
+test_*.py
