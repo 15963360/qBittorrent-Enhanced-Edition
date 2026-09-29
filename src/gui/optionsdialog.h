@@ -132,6 +132,7 @@ private:
     void saveDownloadsTabOptions() const;
 
     void loadConnectionTabOptions();
+    void updateStunStatus();
     void saveConnectionTabOptions() const;
 
     void loadSpeedTabOptions();

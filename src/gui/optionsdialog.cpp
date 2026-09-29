@@ -49,6 +49,7 @@
 
 #include "base/bittorrent/session.h"
 #include "base/bittorrent/sharelimits.h"
+#include "base/bittorrent/stunnattraversal.h"
 #include "base/exceptions.h"
 #include "base/global.h"
 #include "base/net/downloadmanager.h"
@@ -846,6 +847,17 @@ void OptionsDialog::loadConnectionTabOptions()
     m_ui->spinPort->setValue(session->port());
     m_ui->checkUPnP->setChecked(Net::PortForwarder::instance()->isEnabled());
 
+    m_ui->groupStun->setChecked(session->isStunEnabled());
+    m_ui->textStunServers->setPlainText(session->stunServers().join(u'\n'));
+    m_ui->spinStunInterval->setValue(session->stunCheckInterval());
+    m_ui->checkStunAnnouncePort->setChecked(session->isStunAnnouncePortEnabled());
+    updateStunStatus();
+    connect(session, &BitTorrent::Session::stunStatusChanged, this, &ThisType::updateStunStatus);
+    connect(m_ui->buttonStunCheckNow, &QPushButton::clicked, this, []
+    {
+        BitTorrent::Session::instance()->checkStunNow();
+    });
+
     int intValue = session->maxConnections();
     if (intValue > 0)
     {
@@ -949,6 +961,10 @@ void OptionsDialog::loadConnectionTabOptions()
     connect(m_ui->comboProtocol, qComboBoxCurrentIndexChanged, this, &ThisType::enableApplyButton);
     connect(m_ui->spinPort, qSpinBoxValueChanged, this, &ThisType::enableApplyButton);
     connect(m_ui->checkUPnP, &QAbstractButton::toggled, this, &ThisType::enableApplyButton);
+    connect(m_ui->groupStun, &QGroupBox::toggled, this, &ThisType::enableApplyButton);
+    connect(m_ui->textStunServers, &QPlainTextEdit::textChanged, this, &ThisType::enableApplyButton);
+    connect(m_ui->spinStunInterval, qSpinBoxValueChanged, this, &ThisType::enableApplyButton);
+    connect(m_ui->checkStunAnnouncePort, &QAbstractButton::toggled, this, &ThisType::enableApplyButton);
 
     connect(m_ui->checkMaxConnections, &QAbstractButton::toggled, m_ui->spinMaxConnec, &QWidget::setEnabled);
     connect(m_ui->checkMaxConnections, &QAbstractButton::toggled, this, &ThisType::enableApplyButton);
@@ -1001,6 +1017,11 @@ void OptionsDialog::saveConnectionTabOptions() const
     session->setBTProtocol(static_cast<BitTorrent::BTProtocol>(m_ui->comboProtocol->currentIndex()));
     session->setPort(getPort());
     Net::PortForwarder::instance()->setEnabled(isUPnPEnabled());
+
+    session->setStunServers(m_ui->textStunServers->toPlainText().split(u'\n', Qt::SkipEmptyParts));
+    session->setStunCheckInterval(m_ui->spinStunInterval->value());
+    session->setStunAnnouncePortEnabled(m_ui->checkStunAnnouncePort->isChecked());
+    session->setStunEnabled(m_ui->groupStun->isChecked());
 
     session->setMaxConnections(getMaxConnections());
     session->setMaxConnectionsPerTorrent(getMaxConnectionsPerTorrent());
@@ -2177,6 +2198,21 @@ bool OptionsDialog::isAlternativeWebUIPathValid()
     return true;
 }
 #endif
+
+void OptionsDialog::updateStunStatus()
+{
+    const BitTorrent::StunStatus status = BitTorrent::Session::instance()->stunStatus();
+    m_ui->buttonStunCheckNow->setEnabled(status.isEnabled && !status.isChecking);
+    if (!status.isEnabled)
+    {
+        m_ui->labelStunStatus->setText(tr("Status: disabled"));
+        return;
+    }
+
+    m_ui->labelStunStatus->setText(status.isChecking
+        ? (status.toolTipText() + u'\n' + tr("Checking..."))
+        : status.toolTipText());
+}
 
 void OptionsDialog::showConnectionTab()
 {
