@@ -1,6 +1,6 @@
 name: CI - Windows
 
-on: [pull_request, push]
+on: [pull_request, push, workflow_dispatch]
 
 permissions: {}
 
@@ -124,13 +124,29 @@ jobs:
 
       - name: Install libtorrent
         run: |
-          git clone `
+          git -c core.autocrlf=false clone `
             --branch v${{ matrix.libtorrent.version }} `
             --depth 1 `
             --recurse-submodules `
             https://github.com/arvidn/libtorrent.git `
             ${{ env.libtorrent_path }}
           cd ${{ env.libtorrent_path }}
+          # Windows STUN support: allow libtorrent listen sockets to be shared (SO_REUSEADDR)
+          # when `listen_socket_shared` is enabled. Default behavior is unchanged.
+          $patch = "${{ github.workspace }}/dist/windows/patches/libtorrent-${{ matrix.libtorrent.version }}-listen-socket-shared.patch"
+          if (Test-Path $patch)
+          {
+            git -c core.autocrlf=false apply --verbose --whitespace=nowarn "$patch"
+            if ($LASTEXITCODE -ne 0) { throw "Failed to apply libtorrent patch: $patch" }
+            if (-not (Select-String -Quiet -Path include/libtorrent/settings_pack.hpp -Pattern "TORRENT_HAS_LISTEN_SOCKET_SHARED"))
+            {
+              throw "libtorrent patch was not applied correctly"
+            }
+          }
+          else
+          {
+            Write-Host "No listen-socket-shared patch for libtorrent ${{ matrix.libtorrent.version }}; Windows STUN port mapping will be unavailable"
+          }
           $env:CXXFLAGS+=" /guard:cf"
           $env:LDFLAGS+=" /GUARD:CF"
           cmake `

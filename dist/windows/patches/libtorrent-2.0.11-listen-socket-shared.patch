@@ -1,0 +1,117 @@
+diff --git a/include/libtorrent/aux_/session_impl.hpp b/include/libtorrent/aux_/session_impl.hpp
+index 5bbad42..f3f8cc7 100644
+--- a/include/libtorrent/aux_/session_impl.hpp
++++ b/include/libtorrent/aux_/session_impl.hpp
+@@ -1036,6 +1036,11 @@ namespace aux {
+ 			// since we might be listening on multiple interfaces
+ 			// we might need more than one listen socket
+ 			std::vector<std::shared_ptr<listen_socket_t>> m_listen_sockets;
++#ifdef TORRENT_WINDOWS
++			// the value of settings_pack::listen_socket_shared the current
++			// listen sockets were opened with
++			bool m_listen_sockets_shared = false;
++#endif
+
+ #if TORRENT_USE_I2P
+ 			i2p_connection m_i2p_conn;
+diff --git a/include/libtorrent/settings_pack.hpp b/include/libtorrent/settings_pack.hpp
+index b35729d..3d05f9d 100644
+--- a/include/libtorrent/settings_pack.hpp
++++ b/include/libtorrent/settings_pack.hpp
+@@ -62,6 +62,9 @@ POSSIBILITY OF SUCH DAMAGE.
+ //
+ // Each configuration option is named with an enum value inside the
+ // settings_pack class. These are the available settings:
++// defined when settings_pack::listen_socket_shared is available
++#define TORRENT_HAS_LISTEN_SOCKET_SHARED 1
++
+ namespace libtorrent {
+
+ namespace aux {
+@@ -1018,6 +1021,14 @@ namespace aux {
+ 			// protocol may not be valid from the proxy's point of view.
+ 			socks5_udp_send_local_ep,
+
++			// Windows only. When set, listen sockets (TCP and UDP) are bound
++			// with ``SO_REUSEADDR`` instead of ``SO_EXCLUSIVEADDRUSE``, which
++			// allows other sockets (e.g. a STUN client doing NAT traversal)
++			// to be bound to the listen port. Note that this also allows
++			// other local programs to bind the port. Changing this setting
++			// re-opens all listen sockets. Ignored on other platforms.
++			listen_socket_shared,
++
+ 			max_bool_setting_internal
+ 		};
+
+diff --git a/src/session_impl.cpp b/src/session_impl.cpp
+index fe85985..bc7e27f 100644
+--- a/src/session_impl.cpp
++++ b/src/session_impl.cpp
+@@ -1561,6 +1561,7 @@ namespace {
+ 			= setting_changed<std::string>(pack, m_settings, settings_pack::listen_interfaces)
+ 			|| setting_changed<int>(pack, m_settings, settings_pack::proxy_type)
+ 			|| setting_changed<bool>(pack, m_settings, settings_pack::proxy_peer_connections)
++			|| setting_changed<bool>(pack, m_settings, settings_pack::listen_socket_shared)
+ #if TORRENT_ABI_VERSION == 1
+ 			|| setting_changed<int>(pack, m_settings, settings_pack::ssl_listen)
+ #endif
+@@ -1659,6 +1660,13 @@ namespace {
+ 			}
+
+ #ifdef TORRENT_WINDOWS
++			if (m_settings.get_bool(settings_pack::listen_socket_shared))
++			{
++				// allow other sockets (e.g. STUN client) to share the port
++				error_code err;
++				ret->sock->set_option(tcp::acceptor::reuse_address(true), err);
++			}
++			else
+ 			{
+ 				// this is best-effort. ignore errors
+ 				error_code err;
+@@ -1838,6 +1846,15 @@ namespace {
+
+ 		ret->udp_sock = std::make_shared<session_udp_socket>(m_io_context, ret);
+ 		ret->udp_sock->sock.open(udp_bind_ep.protocol(), ec);
++#ifdef TORRENT_WINDOWS
++		if (!ec && m_settings.get_bool(settings_pack::listen_socket_shared))
++		{
++			// udp_socket::open() enables SO_EXCLUSIVEADDRUSE, undo it
++			error_code err;
++			ret->udp_sock->sock.set_option(exclusive_address_use(false), err);
++			ret->udp_sock->sock.set_option(udp::socket::reuse_address(true), err);
++		}
++#endif
+ 		if (ec)
+ 		{
+ #ifndef TORRENT_DISABLE_LOGGING
+@@ -2137,7 +2154,17 @@ namespace {
+ 			expand_devices(ifs, eps);
+ 		}
+
++#ifdef TORRENT_WINDOWS
++		// socket options can't be changed after bind, re-open every socket
++		// when listen_socket_shared has changed
++		bool const shared = m_settings.get_bool(settings_pack::listen_socket_shared);
++		std::vector<listen_endpoint_t> no_eps;
++		auto remove_iter = partition_listen_sockets(
++			(shared != m_listen_sockets_shared) ? no_eps : eps, m_listen_sockets);
++		m_listen_sockets_shared = shared;
++#else
+ 		auto remove_iter = partition_listen_sockets(eps, m_listen_sockets);
++#endif
+
+ 		while (remove_iter != m_listen_sockets.end())
+ 		{
+diff --git a/src/settings_pack.cpp b/src/settings_pack.cpp
+index 72d0a88..5e1e5af 100644
+--- a/src/settings_pack.cpp
++++ b/src/settings_pack.cpp
+@@ -239,6 +239,7 @@ constexpr int DISK_WRITE_MODE = settings_pack::enable_os_cache;
+ 		SET(allow_idna, false, nullptr),
+ 		SET(enable_set_file_valid_data, false, nullptr),
+ 		SET(socks5_udp_send_local_ep, false, nullptr),
++		SET(listen_socket_shared, false, nullptr),
+ 	}});
+
+ 	CONSTEXPR_SETTINGS
