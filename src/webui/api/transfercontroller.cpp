@@ -35,6 +35,7 @@
 #include "base/bittorrent/peerinfo.h"
 #include "base/bittorrent/session.h"
 #include "base/bittorrent/sessionstatus.h"
+#include "base/bittorrent/stunnattraversal.h"
 #include "base/global.h"
 #include "base/utils/string.h"
 #include "apierror.h"
@@ -49,6 +50,10 @@ const QString KEY_TRANSFER_LAST_EXTERNAL_ADDRESS_V4 = u"last_external_address_v4
 const QString KEY_TRANSFER_LAST_EXTERNAL_ADDRESS_V6 = u"last_external_address_v6"_s;
 const QString KEY_TRANSFER_DHT_NODES = u"dht_nodes"_s;
 const QString KEY_TRANSFER_CONNECTION_STATUS = u"connection_status"_s;
+const QString KEY_TRANSFER_STUN_NAT_TYPE = u"stun_nat_type"_s;
+const QString KEY_TRANSFER_STUN_PUBLIC_ADDRESS = u"stun_public_address"_s;
+const QString KEY_TRANSFER_STUN_ANNOUNCE_PORT = u"stun_announce_port"_s;
+const QString KEY_TRANSFER_STUN_LAST_CHECK = u"stun_last_check"_s;
 
 // Returns the global transfer information in JSON format.
 // The return value is a JSON-formatted dictionary.
@@ -63,6 +68,10 @@ const QString KEY_TRANSFER_CONNECTION_STATUS = u"connection_status"_s;
 //   - "last_external_address_v6": external IPv6 address
 //   - "dht_nodes": DHT nodes connected to
 //   - "connection_status": Connection status
+//   - "stun_nat_type": STUN detected NAT type (only when STUN is enabled)
+//   - "stun_public_address": STUN mapped public address of the listening port
+//   - "stun_announce_port": port reported to trackers because of STUN (0: none)
+//   - "stun_last_check": last STUN check time (Unix epoch seconds, -1: never)
 void TransferController::infoAction()
 {
     const auto *btSession = BitTorrent::Session::instance();
@@ -83,6 +92,14 @@ void TransferController::infoAction()
         dict[KEY_TRANSFER_CONNECTION_STATUS] = u"disconnected"_s;
     else
         dict[KEY_TRANSFER_CONNECTION_STATUS] = sessionStatus.hasIncomingConnections ? u"connected"_s : u"firewalled"_s;
+
+    if (const BitTorrent::StunStatus stunStatus = btSession->stunStatus(); stunStatus.isEnabled)
+    {
+        dict[KEY_TRANSFER_STUN_NAT_TYPE] = Net::natTypeToKey(stunStatus.natType);
+        dict[KEY_TRANSFER_STUN_PUBLIC_ADDRESS] = stunStatus.publicAddressString();
+        dict[KEY_TRANSFER_STUN_ANNOUNCE_PORT] = stunStatus.externalPort;
+        dict[KEY_TRANSFER_STUN_LAST_CHECK] = stunStatus.lastCheckTime.isValid() ? stunStatus.lastCheckTime.toSecsSinceEpoch() : -1;
+    }
 
     setResult(dict);
 }

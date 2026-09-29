@@ -49,6 +49,7 @@
 #include <QTranslator>
 
 #include "base/bittorrent/session.h"
+#include "base/bittorrent/stunnattraversal.h"
 #include "base/global.h"
 #include "base/interfaces/iapplication.h"
 #include "base/net/downloadmanager.h"
@@ -500,6 +501,11 @@ void AppController::preferencesAction()
     data[u"announce_to_all_tiers"_s] = session->announceToAllTiers();
     data[u"announce_ip"_s] = session->announceIP();
     data[u"announce_port"_s] = session->announcePort();
+    // STUN NAT traversal
+    data[u"stun_enabled"_s] = session->isStunEnabled();
+    data[u"stun_servers"_s] = session->stunServers().join(u'\n');
+    data[u"stun_check_interval"_s] = session->stunCheckInterval();
+    data[u"stun_announce_port"_s] = session->isStunAnnouncePortEnabled();
     data[u"max_concurrent_http_announces"_s] = session->maxConcurrentHTTPAnnounces();
     data[u"stop_tracker_timeout"_s] = session->stopTrackerTimeout();
     // Peer Turnover
@@ -1196,6 +1202,15 @@ void AppController::setPreferencesAction()
     }
     if (hasKey(u"announce_port"_s))
         session->setAnnouncePort(it.value().toInt());
+    // STUN NAT traversal
+    if (hasKey(u"stun_servers"_s))
+        session->setStunServers(it.value().toString().split(QRegularExpression(u"[\\n\\r,;]"_s), Qt::SkipEmptyParts));
+    if (hasKey(u"stun_check_interval"_s))
+        session->setStunCheckInterval(it.value().toInt());
+    if (hasKey(u"stun_announce_port"_s))
+        session->setStunAnnouncePortEnabled(it.value().toBool());
+    if (hasKey(u"stun_enabled"_s))
+        session->setStunEnabled(it.value().toBool());
     if (hasKey(u"max_concurrent_http_announces"_s))
         session->setMaxConcurrentHTTPAnnounces(it.value().toInt());
     if (hasKey(u"stop_tracker_timeout"_s))
