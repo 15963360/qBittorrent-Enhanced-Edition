@@ -961,7 +961,7 @@ void OptionsDialog::loadConnectionTabOptions()
 
     connect(m_ui->btnTestNATType, &QAbstractButton::clicked, this, [this]()
     {
-        m_ui->lblNATTestResult->setText(tr("正在进行 NAT 类型诊断 (RFC 5780)..."));
+        m_ui->lblNATTestResult->setText(tr("Testing NAT type (RFC 5780)..."));
         BitTorrent::Session::instance()->runSTUNNATTypeTest();
     });
     connect(BitTorrent::Session::instance(), &BitTorrent::Session::stunNATTypeDetected,

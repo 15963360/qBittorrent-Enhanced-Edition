@@ -634,6 +634,26 @@ SessionImpl::SessionImpl(QObject *parent)
             processTorrentShareLimits(torrent);
     });
 
+    m_stunManager = std::make_unique<STUNManager>(this);
+    m_stunManager->setLocalPort(static_cast<quint16>(port()));
+    m_stunManager->setStunServers(m_stunServers.get().split(u';', Qt::SkipEmptyParts));
+    m_stunManager->setKeepAliveInterval(m_stunKeepAliveInterval);
+
+    connect(m_stunManager.get(), &STUNManager::mappedEndpointChanged,
+            this, &SessionImpl::onSTUNMappedEndpointChanged);
+    connect(m_stunManager.get(), &STUNManager::statusChanged,
+            this, &SessionImpl::onSTUNStatusChanged);
+    connect(m_stunManager.get(), &STUNManager::natTypeDetected,
+            this, &SessionImpl::onSTUNNATTypeDetected);
+    connect(m_stunManager.get(), &STUNManager::logMessage,
+            this, &SessionImpl::onSTUNLogMessage);
+
+    if (m_isSTUNEnabled)
+    {
+        m_stunManager->discoverMappedPortSync(1500);
+        m_stunManager->start();
+    }
+
     initializeNativeSession();
     configureComponents();
 
@@ -657,23 +677,6 @@ SessionImpl::SessionImpl(QObject *parent)
     connect(Net::ProxyConfigurationManager::instance()
         , &Net::ProxyConfigurationManager::proxyConfigurationChanged
         , this, &SessionImpl::configureDeferred);
-
-    m_stunManager = std::make_unique<STUNManager>(this);
-    m_stunManager->setLocalPort(static_cast<quint16>(port()));
-    m_stunManager->setStunServers(m_stunServers.get().split(u';', Qt::SkipEmptyParts));
-    m_stunManager->setKeepAliveInterval(m_stunKeepAliveInterval);
-
-    connect(m_stunManager.get(), &STUNManager::mappedEndpointChanged,
-            this, &SessionImpl::onSTUNMappedEndpointChanged);
-    connect(m_stunManager.get(), &STUNManager::statusChanged,
-            this, &SessionImpl::onSTUNStatusChanged);
-    connect(m_stunManager.get(), &STUNManager::natTypeDetected,
-            this, &SessionImpl::onSTUNNATTypeDetected);
-    connect(m_stunManager.get(), &STUNManager::logMessage,
-            this, &SessionImpl::onSTUNLogMessage);
-
-    if (m_isSTUNEnabled)
-        m_stunManager->start();
 
     m_freeDiskSpaceChecker->moveToThread(m_ioThread.get());
     connect(m_ioThread.get(), &QThread::finished, m_freeDiskSpaceChecker, &QObject::deleteLater);
@@ -3791,7 +3794,17 @@ void SessionImpl::setPort(const int port)
     {
         m_port = port;
         if (m_stunManager)
+        {
             m_stunManager->setLocalPort(static_cast<quint16>(port));
+            if (isSTUNEnabled() && m_nativeSession)
+            {
+                lt::settings_pack sp;
+                sp.set_str(lt::settings_pack::listen_interfaces, "");
+                m_nativeSession->apply_settings(sp);
+
+                m_stunManager->discoverMappedPortSync(1500);
+            }
+        }
         configureListeningInterface();
     }
 }
@@ -5062,11 +5075,21 @@ void SessionImpl::setSTUNEnabled(const bool enabled)
     if (enabled != m_isSTUNEnabled)
     {
         m_isSTUNEnabled = enabled;
-        if (m_stunManager)
-            m_stunManager->setEnabled(enabled);
-
-        if (!enabled)
+        if (enabled && m_stunManager)
         {
+            if (m_nativeSession)
+            {
+                lt::settings_pack sp;
+                sp.set_str(lt::settings_pack::listen_interfaces, "");
+                m_nativeSession->apply_settings(sp);
+            }
+
+            m_stunManager->discoverMappedPortSync(1500);
+            m_stunManager->start();
+        }
+        else if (m_stunManager)
+        {
+            m_stunManager->stop();
             m_stunExternalPort = 0;
             m_stunExternalAddress.clear();
         }

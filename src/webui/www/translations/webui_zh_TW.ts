@@ -965,6 +965,26 @@
         <translation>使用從路由器轉送的 UPnP／NAT-PMP 連接埠</translation>
     </message>
     <message>
+        <source>Enable STUN NAT traversal (Full Cone NAT hole punching)</source>
+        <translation>啟用 STUN NAT 穿透 (Full Cone NAT 打洞)</translation>
+    </message>
+    <message>
+        <source>STUN Servers (semicolon-separated):</source>
+        <translation>STUN 伺服器列表 (分號分隔):</translation>
+    </message>
+    <message>
+        <source>Keepalive interval:</source>
+        <translation>心跳保活週期:</translation>
+    </message>
+    <message>
+        <source>STUN Status:</source>
+        <translation>STUN 狀態:</translation>
+    </message>
+    <message>
+        <source>NAT Type:</source>
+        <translation>NAT 類型:</translation>
+    </message>
+    <message>
         <source>Connections Limits</source>
         <translation>連線限制</translation>
     </message>

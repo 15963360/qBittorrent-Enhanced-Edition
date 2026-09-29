@@ -7195,6 +7195,34 @@ readme[0-9].txt ：筛选 “readme1.txt” 、“readme2.txt” 但不筛选 �
         <translation>使用我的路由器的 UPnP / NAT-PMP 端口转发</translation>
     </message>
     <message>
+        <source>STUN NAT Traversal (Full Cone / CGNAT)</source>
+        <translation>STUN 内网穿透 (Full Cone NAT / 大内网打洞)</translation>
+    </message>
+    <message>
+        <source>Enable STUN NAT traversal (Full Cone NAT hole punching)</source>
+        <translation>启用 STUN NAT 穿透 (Full Cone NAT 打洞)</translation>
+    </message>
+    <message>
+        <source>STUN Servers (semicolon-separated):</source>
+        <translation>STUN 服务器列表 (分号分隔):</translation>
+    </message>
+    <message>
+        <source>Keepalive interval:</source>
+        <translation>心跳保活周期:</translation>
+    </message>
+    <message>
+        <source>Test NAT Type (RFC 5780)</source>
+        <translation>检测 NAT 类型 (RFC 5780)</translation>
+    </message>
+    <message>
+        <source>NAT Type: Not tested</source>
+        <translation>NAT 类型: 未检测</translation>
+    </message>
+    <message>
+        <source>Testing NAT type (RFC 5780)...</source>
+        <translation>正在进行 NAT 类型诊断 (RFC 5780)...</translation>
+    </message>
+    <message>
         <location filename="../gui/optionsdialog.ui" line="1906"/>
         <source>Connections Limits</source>
         <translation>连接限制</translation>
@@ -10359,6 +10387,10 @@ Click the &quot;Search plugins...&quot; button at the bottom right of the window
         <location filename="../gui/statusbar.cpp" line="217"/>
         <source>Connection Status:</source>
         <translation>连接状态：</translation>
+    </message>
+    <message>
+        <source>STUN Mapped Endpoint</source>
+        <translation>STUN 映射端点</translation>
     </message>
     <message>
         <location filename="../gui/statusbar.cpp" line="202"/>

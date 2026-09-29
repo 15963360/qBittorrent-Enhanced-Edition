@@ -66,8 +66,11 @@ namespace BitTorrent
         void stop();
         void restart();
 
-        // Trigger manual/diagnostic NAT type test
+        // Trigger manual/diagnostic NAT type test (runs on dedicated ephemeral port, no collision)
         void runNATTypeTest();
+
+        // Discover mapped port on localPort synchronously before libtorrent starts or re-binds
+        bool discoverMappedPortSync(int timeoutMs = 1500);
 
     signals:
         void mappedEndpointChanged(const QHostAddress &ip, quint16 port);
@@ -77,6 +80,7 @@ namespace BitTorrent
 
     private slots:
         void onSocketReadyRead();
+        void onDiagSocketReadyRead();
         void onKeepAliveTimeout();
         void onDnsResolved(const QHostInfo &hostInfo);
         void onDiagnosticTimeout();
@@ -102,7 +106,9 @@ namespace BitTorrent
         void parseServerList();
         void resolveNextServer();
         void sendBindingRequest(const QHostAddress &addr, quint16 port, bool changeIP = false, bool changePort = false);
+        void sendDiagBindingRequest(const QHostAddress &addr, quint16 port, bool changeIP = false, bool changePort = false);
         void handleStunResponse(const STUN::Message &msg, const QHostAddress &sender, quint16 senderPort);
+        void handleDiagStunResponse(const STUN::Message &msg, const QHostAddress &sender, quint16 senderPort);
         void switchNextServer();
         void setStatus(STUNStatus newStatus);
         void finalizeDiagnostic(NATType type, const QString &details);
@@ -121,6 +127,7 @@ namespace BitTorrent
         quint16 m_mappedPort {0};
 
         std::unique_ptr<QUdpSocket> m_socket;
+        std::unique_ptr<QUdpSocket> m_diagSocket;
         QTimer m_keepAliveTimer;
         QTimer m_diagnosticTimer;
 
