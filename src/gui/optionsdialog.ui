@@ -1965,6 +1965,72 @@ readme[0-9].txt: filter 'readme1.txt', 'readme2.txt' but not 'readme10.txt'.</st
                     </item>
                    </layout>
                   </item>
+                  <item>
+                   <widget class="QFrame" name="frameSTUNStatus">
+                    <property name="frameShape">
+                     <enum>QFrame::Shape::StyledPanel</enum>
+                    </property>
+                    <layout class="QGridLayout" name="stunStatusGridLayout">
+                     <item row="0" column="0">
+                      <widget class="QLabel" name="lblSTUNStatusHeader">
+                       <property name="text">
+                        <string>Current STUN Status:</string>
+                       </property>
+                       <property name="font">
+                        <font>
+                         <bold>true</bold>
+                        </font>
+                       </property>
+                      </widget>
+                     </item>
+                     <item row="0" column="1">
+                      <widget class="QLabel" name="lblSTUNStatusValue">
+                       <property name="text">
+                        <string>Disabled</string>
+                       </property>
+                      </widget>
+                     </item>
+                     <item row="1" column="0">
+                      <widget class="QLabel" name="lblSTUNEndpointHeader">
+                       <property name="text">
+                        <string>Public Mapped Endpoint:</string>
+                       </property>
+                       <property name="font">
+                        <font>
+                         <bold>true</bold>
+                        </font>
+                       </property>
+                      </widget>
+                     </item>
+                     <item row="1" column="1">
+                      <widget class="QLabel" name="lblSTUNEndpointValue">
+                       <property name="text">
+                        <string>N/A</string>
+                       </property>
+                      </widget>
+                     </item>
+                     <item row="2" column="0">
+                      <widget class="QLabel" name="lblSTUNDualStackHeader">
+                       <property name="text">
+                        <string>Dual-stack Listening:</string>
+                       </property>
+                       <property name="font">
+                        <font>
+                         <bold>true</bold>
+                        </font>
+                       </property>
+                      </widget>
+                     </item>
+                     <item row="2" column="1">
+                      <widget class="QLabel" name="lblSTUNDualStackValue">
+                       <property name="text">
+                        <string>N/A</string>
+                       </property>
+                      </widget>
+                     </item>
+                    </layout>
+                   </widget>
+                  </item>
                  </layout>
                 </widget>
                </item>

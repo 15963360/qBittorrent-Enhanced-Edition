@@ -7223,6 +7223,54 @@ readme[0-9].txt：過濾「readme1.txt」、「readme2.txt」但不包含「read
         <translation>正在進行 NAT 類型診斷 (RFC 5780)...</translation>
     </message>
     <message>
+        <source>Current STUN Status:</source>
+        <translation>目前穿透狀態：</translation>
+    </message>
+    <message>
+        <source>Public Mapped Endpoint:</source>
+        <translation>公網對應端點：</translation>
+    </message>
+    <message>
+        <source>Dual-stack Listening:</source>
+        <translation>雙堆疊協同監聽：</translation>
+    </message>
+    <message>
+        <source>Mapped successfully (NAT1 Full Cone)</source>
+        <translation>🟢 穿透成功 (NAT1 全錐形)</translation>
+    </message>
+    <message>
+        <source>Probing mapping...</source>
+        <translation>🟡 探測對應中...</translation>
+    </message>
+    <message>
+        <source>Resolving server...</source>
+        <translation>🟡 解析伺服器中...</translation>
+    </message>
+    <message>
+        <source>Connection timeout / error</source>
+        <translation>🔴 連線錯誤／逾時</translation>
+    </message>
+    <message>
+        <source>Not active</source>
+        <translation>⚪ 未啟動</translation>
+    </message>
+    <message>
+        <source>local port</source>
+        <translation>本地連接埠</translation>
+    </message>
+    <message>
+        <source>NAT1 mapped</source>
+        <translation>NAT1 對應</translation>
+    </message>
+    <message>
+        <source>active for dual-stack peers</source>
+        <translation>保障雙堆疊 Peer 連入</translation>
+    </message>
+    <message>
+        <source>Probing in progress...</source>
+        <translation>正在探測中...</translation>
+    </message>
+    <message>
         <location filename="../gui/optionsdialog.ui" line="1906"/>
         <source>Connections Limits</source>
         <translation>連線限制</translation>

@@ -850,6 +850,7 @@ void OptionsDialog::loadConnectionTabOptions()
     m_ui->textSTUNServers->setText(session->stunServers().join(u';'));
     m_ui->spinSTUNKeepAlive->setValue(session->stunKeepAliveInterval());
     m_ui->lblNATTestResult->setText(BitTorrent::natTypeToString(session->stunNATType()));
+    updateSTUNStatusDisplay();
 
     int intValue = session->maxConnections();
     if (intValue > 0)
@@ -969,6 +970,12 @@ void OptionsDialog::loadConnectionTabOptions()
     {
         m_ui->lblNATTestResult->setText(QStringLiteral("%1: %2").arg(BitTorrent::natTypeToString(type), details));
     });
+    connect(BitTorrent::Session::instance(), &BitTorrent::Session::stunMappedEndpointChanged,
+            this, &ThisType::updateSTUNStatusDisplay);
+    connect(BitTorrent::Session::instance(), &BitTorrent::Session::stunStatusChanged,
+            this, &ThisType::updateSTUNStatusDisplay);
+    connect(m_ui->checkSTUN, &QAbstractButton::toggled,
+            this, &ThisType::updateSTUNStatusDisplay);
 
     connect(m_ui->checkMaxConnections, &QAbstractButton::toggled, m_ui->spinMaxConnec, &QWidget::setEnabled);
     connect(m_ui->checkMaxConnections, &QAbstractButton::toggled, this, &ThisType::enableApplyButton);
@@ -1062,6 +1069,63 @@ void OptionsDialog::saveConnectionTabOptions() const
 
     // Shadowban
     session->setShadowBan(m_ui->shadowBanEnabled->isChecked());
+}
+
+void OptionsDialog::updateSTUNStatusDisplay()
+{
+    const auto *session = BitTorrent::Session::instance();
+    if (!m_ui->checkSTUN->isChecked())
+    {
+        m_ui->lblSTUNStatusValue->setText(tr("Disabled"));
+        m_ui->lblSTUNEndpointValue->setText(tr("N/A"));
+        m_ui->lblSTUNDualStackValue->setText(tr("N/A"));
+        return;
+    }
+
+    const BitTorrent::STUNStatus status = session->stunStatus();
+    const QHostAddress mappedAddr = session->stunMappedAddress();
+    const quint16 mappedPort = session->stunMappedPort();
+    const int localPort = session->port();
+
+    switch (status)
+    {
+    case BitTorrent::STUNStatus::Mapped:
+        m_ui->lblSTUNStatusValue->setText(tr("Mapped successfully (NAT1 Full Cone)"));
+        break;
+    case BitTorrent::STUNStatus::Probing:
+        m_ui->lblSTUNStatusValue->setText(tr("Probing mapping..."));
+        break;
+    case BitTorrent::STUNStatus::Resolving:
+        m_ui->lblSTUNStatusValue->setText(tr("Resolving server..."));
+        break;
+    case BitTorrent::STUNStatus::Error:
+        m_ui->lblSTUNStatusValue->setText(tr("Connection timeout / error"));
+        break;
+    default:
+        m_ui->lblSTUNStatusValue->setText(tr("Not active"));
+        break;
+    }
+
+    if (!mappedAddr.isNull() && (mappedPort > 0))
+    {
+        m_ui->lblSTUNEndpointValue->setText(QStringLiteral("%1:%2 (%3: %4)")
+            .arg(mappedAddr.toString()).arg(mappedPort).arg(tr("local port")).arg(localPort));
+
+        if (mappedPort != localPort)
+        {
+            m_ui->lblSTUNDualStackValue->setText(QStringLiteral("IPv4: %1 (%2: %3) | IPv6: [::]:%3 (%4)")
+                .arg(localPort).arg(tr("NAT1 mapped")).arg(mappedPort).arg(tr("active for dual-stack peers")));
+        }
+        else
+        {
+            m_ui->lblSTUNDualStackValue->setText(QStringLiteral("IPv4: %1 | IPv6: [::]:%1").arg(localPort));
+        }
+    }
+    else
+    {
+        m_ui->lblSTUNEndpointValue->setText(tr("Probing in progress..."));
+        m_ui->lblSTUNDualStackValue->setText(QStringLiteral("IPv4: %1 | IPv6: [::]:%1").arg(localPort));
+    }
 }
 
 void OptionsDialog::loadSpeedTabOptions()

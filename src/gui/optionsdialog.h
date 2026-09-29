@@ -169,6 +169,7 @@ private:
     // Connection options
     int getPort() const;
     bool isUPnPEnabled() const;
+    void updateSTUNStatusDisplay();
     // Bittorrent options
     int getMaxConnections() const;
     int getMaxConnectionsPerTorrent() const;

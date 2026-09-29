@@ -5164,6 +5164,13 @@ void SessionImpl::onSTUNMappedEndpointChanged(const QHostAddress &ip, quint16 po
 
     emit stunMappedEndpointChanged(ip, port);
 
+    LogMsg(QStringLiteral("[STUN 穿透成功] 已打通运营商大内网:\n"
+                          "  ├─ 本地监听端口: %1\n"
+                          "  ├─ 公网 IPv4 映射端点: %2:%3\n"
+                          "  ├─ Tracker 汇报端口: %3 (外部 Peer 通过此端口直连)\n"
+                          "  └─ IPv6 兼容保障: 已扩展监听 [::]:%3 (确保 IPv4/IPv6 双栈 Peer 均可成功连入)")
+           .arg(QString::number(this->port()), ip.toString(), QString::number(port)), Log::INFO);
+
     if (portChanged)
     {
         configureListeningInterface();
