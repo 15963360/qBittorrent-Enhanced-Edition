@@ -29,6 +29,8 @@
 #include "stunnattypedetector.h"
 
 #include <chrono>
+#include <iterator>
+#include <utility>
 
 #include <QNetworkDatagram>
 #include <QNetworkInterface>
@@ -43,7 +45,7 @@ namespace
 {
     // RFC 5389 section 7.2.1 style retransmission schedule (shortened)
     constexpr std::chrono::milliseconds RETRANSMIT_INTERVALS[] = {500ms, 1000ms, 1000ms};
-    constexpr int MAX_ATTEMPTS = std::size(RETRANSMIT_INTERVALS);
+    constexpr int MAX_ATTEMPTS = static_cast<int>(std::size(RETRANSMIT_INTERVALS));
 
     bool isLocalAddress(const QHostAddress &address)
     {

@@ -30,9 +30,16 @@
 
 #include <QtSystemDetection>
 
-#ifdef Q_OS_UNIX
+#include <algorithm>
+#include <system_error>
+#include <utility>
+
+#ifdef Q_OS_WIN
+#include <winsock2.h>
+#include <ws2tcpip.h>
+#include <windows.h>
+#elif defined(Q_OS_UNIX)
 #include <cerrno>
-#include <cstring>
 
 #include <fcntl.h>
 #include <netinet/in.h>
@@ -40,8 +47,6 @@
 #include <sys/socket.h>
 #include <unistd.h>
 #endif
-
-#include <algorithm>
 
 #include <QDir>
 #include <QNetworkDatagram>
@@ -54,6 +59,10 @@
 
 using namespace std::chrono_literals;
 
+#if defined(Q_OS_WIN) || (defined(Q_OS_UNIX) && defined(SO_REUSEPORT))
+#define QBT_STUN_PORT_SHARING_SUPPORTED
+#endif
+
 namespace
 {
     constexpr std::chrono::milliseconds TCP_CONNECT_TIMEOUT = 5s;
@@ -63,12 +72,130 @@ namespace
     constexpr std::chrono::milliseconds RETRY_DELAY = 1s;
     constexpr std::chrono::milliseconds RECONNECT_DELAY = 5s;
 
-#if defined(Q_OS_UNIX) && defined(SO_REUSEPORT)
-#define QBT_STUN_PORT_SHARING_SUPPORTED
-#endif
-
 #ifdef QBT_STUN_PORT_SHARING_SUPPORTED
     using Protocol = Net::StunPortMapper::Protocol;
+
+    QString socketErrorString(const int error)
+    {
+        return QString::fromLocal8Bit(std::system_category().message(error));
+    }
+
+#ifdef Q_OS_WIN
+    // Windows: libtorrent binds its listen sockets with SO_EXCLUSIVEADDRUSE,
+    // unless the (patched) `listen_socket_shared` setting is enabled, in which
+    // case SO_REUSEADDR is used. Then another socket with SO_REUSEADDR can be
+    // bound to the same port.
+
+    int lastSocketError()
+    {
+        return ::WSAGetLastError();
+    }
+
+    bool isConnectInProgress(const int error)
+    {
+        return (error == WSAEWOULDBLOCK) || (error == WSAEINPROGRESS);
+    }
+
+    void closeNativeSocket(const qintptr fd)
+    {
+        ::closesocket(static_cast<SOCKET>(fd));
+    }
+
+    bool ensureWinsockInitialized()
+    {
+        static const bool initialized = []
+        {
+            WSADATA data {};
+            return (::WSAStartup(MAKEWORD(2, 2), &data) == 0);
+        }();
+        return initialized;
+    }
+
+    qintptr createSharedSocket(const Protocol protocol, const quint16 port, QString &error)
+    {
+        if (!ensureWinsockInitialized())
+        {
+            error = socketErrorString(lastSocketError());
+            return -1;
+        }
+
+        const SOCKET fd = ::socket(AF_INET, ((protocol == Protocol::TCP) ? SOCK_STREAM : SOCK_DGRAM)
+            , ((protocol == Protocol::TCP) ? IPPROTO_TCP : IPPROTO_UDP));
+        if (fd == INVALID_SOCKET)
+        {
+            error = socketErrorString(lastSocketError());
+            return -1;
+        }
+
+        ::SetHandleInformation(reinterpret_cast<HANDLE>(fd), HANDLE_FLAG_INHERIT, 0);
+        u_long nonBlocking = 1;
+        ::ioctlsocket(fd, FIONBIO, &nonBlocking);
+
+        const BOOL enable = TRUE;
+        ::setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, reinterpret_cast<const char *>(&enable), sizeof(enable));
+
+        sockaddr_in addr {};
+        addr.sin_family = AF_INET;
+        addr.sin_addr.s_addr = htonl(INADDR_ANY);
+        addr.sin_port = htons(port);
+
+        if (::bind(fd, reinterpret_cast<const sockaddr *>(&addr), sizeof(addr)) != 0)
+        {
+            const int bindError = lastSocketError();
+            error = socketErrorString(bindError);
+            if (bindError == WSAEACCES)
+                error += Net::StunPortMapper::tr(" (the port is used exclusively, port sharing is not enabled in libtorrent)");
+            ::closesocket(fd);
+            return -1;
+        }
+
+        return static_cast<qintptr>(fd);
+    }
+
+    // Returns 0 on immediate success or error code
+    int connectSocket(const qintptr fd, const Net::Stun::Endpoint &endpoint)
+    {
+        sockaddr_in addr {};
+        addr.sin_family = AF_INET;
+        addr.sin_addr.s_addr = htonl(endpoint.address.toIPv4Address());
+        addr.sin_port = htons(endpoint.port);
+
+        if (::connect(static_cast<SOCKET>(fd), reinterpret_cast<const sockaddr *>(&addr), sizeof(addr)) == 0)
+            return 0;
+        return lastSocketError();
+    }
+
+    // Returns 0 if pending non-blocking connect succeeded, error code otherwise
+    int pendingConnectResult(const qintptr fd)
+    {
+        int error = 0;
+        int len = sizeof(error);
+        if (::getsockopt(static_cast<SOCKET>(fd), SOL_SOCKET, SO_ERROR, reinterpret_cast<char *>(&error), &len) != 0)
+            return lastSocketError();
+        if (error != 0)
+            return error;
+
+        sockaddr_storage peer {};
+        int peerLen = sizeof(peer);
+        if (::getpeername(static_cast<SOCKET>(fd), reinterpret_cast<sockaddr *>(&peer), &peerLen) != 0)
+            return WSAECONNREFUSED;
+        return 0;
+    }
+#else
+    int lastSocketError()
+    {
+        return errno;
+    }
+
+    bool isConnectInProgress(const int error)
+    {
+        return (error == EINPROGRESS);
+    }
+
+    void closeNativeSocket(const qintptr fd)
+    {
+        ::close(static_cast<int>(fd));
+    }
 
     QList<int> listOpenFileDescriptors()
     {
@@ -150,12 +277,12 @@ namespace
         return count;
     }
 
-    int createSharedSocket(const Protocol protocol, const quint16 port, QString &error)
+    qintptr createSharedSocket(const Protocol protocol, const quint16 port, QString &error)
     {
         const int fd = ::socket(AF_INET, ((protocol == Protocol::TCP) ? SOCK_STREAM : SOCK_DGRAM), 0);
         if (fd < 0)
         {
-            error = QString::fromLocal8Bit(std::strerror(errno));
+            error = socketErrorString(lastSocketError());
             return -1;
         }
 
@@ -180,7 +307,7 @@ namespace
 
         if (result != 0)
         {
-            error = QString::fromLocal8Bit(std::strerror(errno));
+            error = socketErrorString(lastSocketError());
             ::close(fd);
             return -1;
         }
@@ -188,18 +315,29 @@ namespace
         return fd;
     }
 
-    // Returns 0 on immediate success, EINPROGRESS if pending, or errno
-    int connectSocket(const int fd, const Net::Stun::Endpoint &endpoint)
+    // Returns 0 on immediate success or errno
+    int connectSocket(const qintptr fd, const Net::Stun::Endpoint &endpoint)
     {
         sockaddr_in addr {};
         addr.sin_family = AF_INET;
         addr.sin_addr.s_addr = htonl(endpoint.address.toIPv4Address());
         addr.sin_port = htons(endpoint.port);
 
-        if (::connect(fd, reinterpret_cast<const sockaddr *>(&addr), sizeof(addr)) == 0)
+        if (::connect(static_cast<int>(fd), reinterpret_cast<const sockaddr *>(&addr), sizeof(addr)) == 0)
             return 0;
-        return errno;
+        return lastSocketError();
     }
+
+    // Returns 0 if pending non-blocking connect succeeded, error code otherwise
+    int pendingConnectResult(const qintptr fd)
+    {
+        int error = 0;
+        socklen_t len = sizeof(error);
+        if (::getsockopt(static_cast<int>(fd), SOL_SOCKET, SO_ERROR, &error, &len) != 0)
+            return lastSocketError();
+        return error;
+    }
+#endif
 #endif
 }
 
@@ -226,7 +364,10 @@ Net::StunPortMapper::~StunPortMapper()
 bool Net::StunPortMapper::isSupported(const Protocol protocol)
 {
 #ifdef QBT_STUN_PORT_SHARING_SUPPORTED
-#ifdef Q_OS_LINUX
+#if defined(Q_OS_LINUX) || defined(Q_OS_WIN)
+    // Windows requires libtorrent `listen_socket_shared` (see SessionImpl).
+    // On Windows the UDP mapping is best effort: delivery of the STUN reply to
+    // the connected socket rather than to libtorrent's socket isn't guaranteed.
     Q_UNUSED(protocol);
     return true;
 #else
@@ -318,7 +459,7 @@ void Net::StunPortMapper::connectToServer()
     const Stun::Endpoint &server = m_servers[m_serverIndex % m_servers.size()];
 
     QString error;
-    const int fd = createSharedSocket(m_protocol, m_localPort, error);
+    const qintptr fd = createSharedSocket(m_protocol, m_localPort, error);
     if (fd < 0)
     {
         fail(tr("Couldn't bind to local port %1: %2").arg(QString::number(m_localPort), error));
@@ -330,7 +471,7 @@ void Net::StunPortMapper::connectToServer()
     {
         onConnected(fd);
     }
-    else if (result == EINPROGRESS)
+    else if (isConnectInProgress(result))
     {
         m_pendingFD = fd;
         m_connectNotifier = new QSocketNotifier(fd, QSocketNotifier::Write, this);
@@ -339,8 +480,8 @@ void Net::StunPortMapper::connectToServer()
     }
     else
     {
-        ::close(fd);
-        tryNextServer(tr("Couldn't connect to %1: %2").arg(server.toString(), QString::fromLocal8Bit(std::strerror(result))));
+        closeNativeSocket(fd);
+        tryNextServer(tr("Couldn't connect to %1: %2").arg(server.toString(), socketErrorString(result)));
     }
 #endif
 }
@@ -350,17 +491,15 @@ void Net::StunPortMapper::onConnectNotifierActivated()
 #ifdef QBT_STUN_PORT_SHARING_SUPPORTED
     m_transactionTimer->stop();
 
-    const int fd = std::exchange(m_pendingFD, -1);
+    const qintptr fd = std::exchange(m_pendingFD, -1);
     delete m_connectNotifier;
     m_connectNotifier = nullptr;
 
-    int error = 0;
-    socklen_t len = sizeof(error);
-    if ((::getsockopt(fd, SOL_SOCKET, SO_ERROR, &error, &len) != 0) || (error != 0))
+    if (const int error = pendingConnectResult(fd); error != 0)
     {
-        ::close(fd);
+        closeNativeSocket(fd);
         const Stun::Endpoint &server = m_servers[m_serverIndex % m_servers.size()];
-        tryNextServer(tr("Couldn't connect to %1: %2").arg(server.toString(), QString::fromLocal8Bit(std::strerror(error))));
+        tryNextServer(tr("Couldn't connect to %1: %2").arg(server.toString(), socketErrorString(error)));
         return;
     }
 
@@ -368,7 +507,7 @@ void Net::StunPortMapper::onConnectNotifierActivated()
 #endif
 }
 
-void Net::StunPortMapper::onConnected(const int fd)
+void Net::StunPortMapper::onConnected(const qintptr fd)
 {
     if (m_protocol == Protocol::TCP)
     {
@@ -535,7 +674,7 @@ void Net::StunPortMapper::closeSocket()
 
 #ifdef QBT_STUN_PORT_SHARING_SUPPORTED
     if (m_pendingFD >= 0)
-        ::close(std::exchange(m_pendingFD, -1));
+        closeNativeSocket(std::exchange(m_pendingFD, -1));
 #endif
 
     if (m_socket)

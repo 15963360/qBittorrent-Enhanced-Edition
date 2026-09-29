@@ -100,7 +100,7 @@ namespace
                 qToBigEndian(MAGIC_COOKIE, mask);
                 std::memcpy(mask + 4, transactionID.constData(), TRANSACTION_ID_SIZE);
                 for (int i = 0; i < 16; ++i)
-                    ip.c[i] ^= static_cast<quint8>(mask[i]);
+                    ip.c[i] = static_cast<quint8>(ip.c[i] ^ static_cast<quint8>(mask[i]));
             }
             return {QHostAddress(ip), port};
         }

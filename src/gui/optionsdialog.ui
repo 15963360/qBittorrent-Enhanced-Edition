@@ -1988,12 +1988,22 @@ readme[0-9].txt: filter 'readme1.txt', 'readme2.txt' but not 'readme10.txt'.</st
                <item>
                 <widget class="QCheckBox" name="checkStunAnnouncePort">
                  <property name="toolTip">
-                  <string>Overrides "Port reported to trackers" from Advanced settings while a usable STUN mapping exists. Torrents are re-announced when the mapping changes.</string>
+                  <string>Overrides &quot;Port reported to trackers&quot; from Advanced settings while a usable STUN mapping exists. Torrents are re-announced when the mapping changes.</string>
                  </property>
                  <property name="text">
                   <string>Report STUN mapped public port to trackers and DHT</string>
                  </property>
                  <property name="checked">
+                  <bool>true</bool>
+                 </property>
+                </widget>
+               </item>
+               <item>
+                <widget class="QLabel" name="labelStunWindowsWarning">
+                 <property name="text">
+                  <string>Windows: to map the listening port, qBittorrent opens its listening sockets in shared mode (SO_REUSEADDR instead of SO_EXCLUSIVEADDRUSE) while STUN and reporting the mapped port are enabled. Other local programs can then bind the same port too.</string>
+                 </property>
+                 <property name="wordWrap">
                   <bool>true</bool>
                  </property>
                 </widget>

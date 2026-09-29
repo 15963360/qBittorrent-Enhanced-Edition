@@ -48,15 +48,20 @@ namespace Net
     // same local port as the service, so the NAT mapping reported by the STUN
     // server is exactly the one remote peers have to use to reach the service.
     // Binding to an already used port is only possible if every socket bound to
-    // it allows address sharing, so SO_REUSEADDR/SO_REUSEPORT is enabled on the
-    // service sockets owned by this process first (see enableAddressSharing()).
+    // it allows address sharing:
+    //  - Unix: SO_REUSEADDR/SO_REUSEPORT is enabled on the service sockets owned
+    //    by this process first (see enableAddressSharing()).
+    //  - Windows: the service must not use SO_EXCLUSIVEADDRUSE; libtorrent does
+    //    unless its (patched) `listen_socket_shared` setting is enabled. The
+    //    STUN socket is then bound with SO_REUSEADDR.
     //
     // TCP: a long-lived connection to the STUN server is kept open and a new
     //      Binding request is sent every keep-alive interval, which both keeps
     //      the NAT session alive and detects mapping changes.
     // UDP: a short-lived *connected* UDP socket is used so that the kernel only
     //      delivers the STUN server's datagrams to it; all other datagrams keep
-    //      going to the service's unconnected socket (Linux only). The socket is
+    //      going to the service's unconnected socket (Linux; best effort on
+    //      Windows). The socket is
     //      closed right after each transaction so that it never prevents the
     //      service from re-binding its own socket.
     class StunPortMapper final : public QObject
@@ -93,7 +98,7 @@ namespace Net
     private:
         void connectToServer();
         void onConnectNotifierActivated();
-        void onConnected(int fd);
+        void onConnected(qintptr fd);
         void sendBindingRequest();
         void onReadyRead();
         void processMessage(const QByteArray &data);
@@ -116,7 +121,7 @@ namespace Net
         bool m_gotResponseOnConnection = false;
         QString m_lastError;
 
-        int m_pendingFD = -1;
+        qintptr m_pendingFD = -1;
         QSocketNotifier *m_connectNotifier = nullptr;
         QAbstractSocket *m_socket = nullptr;
         QByteArray m_buffer;

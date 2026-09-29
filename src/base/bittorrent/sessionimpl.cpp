@@ -697,6 +697,8 @@ SessionImpl::SessionImpl(QObject *parent)
     connect(m_stunNatTraversal, &StunNatTraversal::statusChanged, this, &Session::stunStatusChanged);
     connect(m_stunNatTraversal, &StunNatTraversal::externalPortChanged, this, &SessionImpl::handleStunExternalPortChanged);
     m_stunListenPort = m_nativeSession->listen_port();
+    // the native session was created with this value (see loadLTSettings())
+    m_listenSocketsShared = isListenSocketSharingRequired();
     configureStun();
 
     // start embedded tracker
@@ -1391,8 +1393,11 @@ void SessionImpl::configure()
     m_nativeSession->apply_settings(loadLTSettings());
     configureComponents();
 
-    if (isListenInterfaceChanged)
+    // Changing `listen_socket_shared` makes libtorrent re-open the listen sockets
+    const bool isListenSocketSharingChanged = (m_listenSocketsShared != isListenSocketSharingRequired());
+    if (isListenInterfaceChanged || isListenSocketSharingChanged)
     {
+        m_listenSocketsShared = isListenSocketSharingRequired();
         // listen_port() is a synchronous call executed after the settings above are applied
         m_stunListenPort = m_nativeSession->listen_port();
         configureStun();
@@ -2147,6 +2152,11 @@ lt::settings_pack SessionImpl::loadLTSettings() const
 #if LIBTORRENT_VERSION_NUM >= 20011
     // Port to announce to trackers
     settingsPack.set_int(lt::settings_pack::announce_port, effectiveAnnouncePort());
+#endif
+#if defined(Q_OS_WIN) && defined(TORRENT_HAS_LISTEN_SOCKET_SHARED)
+    // Use SO_REUSEADDR instead of SO_EXCLUSIVEADDRUSE for listen sockets so
+    // that STUN can be sent from the listening port (patched libtorrent)
+    settingsPack.set_bool(lt::settings_pack::listen_socket_shared, isListenSocketSharingRequired());
 #endif
     // Max concurrent HTTP announces
     settingsPack.set_int(lt::settings_pack::max_concurrent_http_announces, maxConcurrentHTTPAnnounces());
@@ -5052,6 +5062,8 @@ void SessionImpl::setStunEnabled(const bool enabled)
     m_isStunEnabled = enabled;
     configureStun();
     updateAnnouncePort();
+    if (isListenSocketSharingRequired() != m_listenSocketsShared)
+        configureDeferred();
 }
 
 QStringList SessionImpl::stunServers() const
@@ -5106,6 +5118,8 @@ void SessionImpl::setStunAnnouncePortEnabled(const bool enabled)
 
     m_isStunAnnouncePortEnabled = enabled;
     updateAnnouncePort();
+    if (isListenSocketSharingRequired() != m_listenSocketsShared)
+        configureDeferred();
 }
 
 StunStatus SessionImpl::stunStatus() const
@@ -5119,12 +5133,44 @@ void SessionImpl::checkStunNow()
         m_stunNatTraversal->checkNow();
 }
 
+bool SessionImpl::isListenSocketSharingRequired() const
+{
+#if defined(Q_OS_WIN) && defined(TORRENT_HAS_LISTEN_SOCKET_SHARED)
+    // Opt-in: it lets other local programs bind the listening port as well
+    return isStunEnabled() && isStunAnnouncePortEnabled();
+#else
+    return false;
+#endif
+}
+
+quint16 SessionImpl::stunMappingPort() const
+{
+#ifdef Q_OS_WIN
+    // On Windows the listening port can only be shared if libtorrent listen
+    // sockets were opened with `listen_socket_shared`
+    return m_listenSocketsShared ? m_stunListenPort : 0;
+#else
+    return m_stunListenPort;
+#endif
+}
+
 void SessionImpl::configureStun()
 {
     if (!m_stunNatTraversal)
         return;
 
-    m_stunNatTraversal->configure(isStunEnabled(), m_stunListenPort, stunServers()
+#ifdef Q_OS_WIN
+    if (isStunEnabled() && !isListenSocketSharingRequired())
+    {
+#ifdef TORRENT_HAS_LISTEN_SOCKET_SHARED
+        LogMsg(tr("STUN: listening port mapping is disabled because reporting the mapped port is off (only NAT type is detected)"), Log::INFO);
+#else
+        LogMsg(tr("STUN: listening port mapping requires libtorrent with listen socket sharing support on Windows (only NAT type is detected)"), Log::WARNING);
+#endif
+    }
+#endif
+
+    m_stunNatTraversal->configure(isStunEnabled(), stunMappingPort(), stunServers()
         , std::chrono::seconds(stunCheckInterval()));
 }
 

@@ -854,6 +854,9 @@ void OptionsDialog::loadConnectionTabOptions()
     m_ui->textStunServers->setPlainText(session->stunServers().join(u'\n'));
     m_ui->spinStunInterval->setValue(session->stunCheckInterval());
     m_ui->checkStunAnnouncePort->setChecked(session->isStunAnnouncePortEnabled());
+#ifndef Q_OS_WIN
+    m_ui->labelStunWindowsWarning->hide();
+#endif
     updateStunStatus();
     connect(session, &BitTorrent::Session::stunStatusChanged, this, &ThisType::updateStunStatus);
     connect(m_ui->buttonStunCheckNow, &QPushButton::clicked, this, []

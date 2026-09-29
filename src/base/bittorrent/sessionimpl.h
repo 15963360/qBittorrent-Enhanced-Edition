@@ -555,6 +555,8 @@ namespace BitTorrent
         struct ResumeSessionContext;
 
         void configureStun();
+        bool isListenSocketSharingRequired() const;
+        quint16 stunMappingPort() const;
         void handleStunExternalPortChanged(quint16 port);
         void updateAnnouncePort();
         int effectiveAnnouncePort() const;
@@ -909,6 +911,7 @@ namespace BitTorrent
         StunNatTraversal *m_stunNatTraversal = nullptr;
         quint16 m_stunListenPort = 0;
         quint16 m_stunExternalPort = 0;
+        bool m_listenSocketsShared = false;
 
         bool m_needUpgradeDownloadPath = false;
 

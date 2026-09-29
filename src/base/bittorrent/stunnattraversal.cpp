@@ -250,7 +250,7 @@ void BitTorrent::StunNatTraversal::resolveServers()
         return;
     }
 
-    m_pendingLookups = lookups.size();
+    m_pendingLookups = static_cast<int>(lookups.size());
     for (const auto &[index, server] : asConst(lookups))
     {
         QHostInfo::lookupHost(server.host, this, [this, generation, index, port = server.port](const QHostInfo &hostInfo)

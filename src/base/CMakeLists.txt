@@ -265,7 +265,7 @@ elseif (CMAKE_SYSTEM_NAME STREQUAL "Linux")
         target_compile_definitions(qbt_base PUBLIC QBT_USES_GETRANDOM)
     endif()
 elseif (CMAKE_SYSTEM_NAME STREQUAL "Windows")
-    target_link_libraries(qbt_base PRIVATE iphlpapi powrprof)
+    target_link_libraries(qbt_base PRIVATE iphlpapi powrprof ws2_32)
 endif()
 
 if (NOT GUI)
