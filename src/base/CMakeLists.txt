@@ -37,6 +37,7 @@ add_library(qbt_base STATIC
     bittorrent/sharelimits.h
     bittorrent/speedmonitor.h
     bittorrent/sslparameters.h
+    bittorrent/stunnattraversal.h
     bittorrent/torrent.h
     bittorrent/torrentannouncestatus.h
     bittorrent/torrentcontenthandler.h
@@ -78,6 +79,9 @@ add_library(qbt_base STATIC
     net/proxyconfigurationmanager.h
     net/reverseresolution.h
     net/smtp.h
+    net/stunmessage.h
+    net/stunnattypedetector.h
+    net/stunportmapper.h
     orderedset.h
     path.h
     pathfwd.h
@@ -150,6 +154,7 @@ add_library(qbt_base STATIC
     bittorrent/sessionimpl.cpp
     bittorrent/speedmonitor.cpp
     bittorrent/sslparameters.cpp
+    bittorrent/stunnattraversal.cpp
     bittorrent/torrent.cpp
     bittorrent/torrentcontenthandler.cpp
     bittorrent/torrentcontentremover.cpp
@@ -180,6 +185,9 @@ add_library(qbt_base STATIC
     net/proxyconfigurationmanager.cpp
     net/reverseresolution.cpp
     net/smtp.cpp
+    net/stunmessage.cpp
+    net/stunnattypedetector.cpp
+    net/stunportmapper.cpp
     path.cpp
     preferences.cpp
     profile.cpp
