@@ -120,13 +120,21 @@ namespace
         int m_tcpConnections = 0;
     };
 
+    quint16 freePort()
+    {
+        QTcpServer server;
+        if (!server.listen(QHostAddress::AnyIPv4, 0))
+            return 0;
+        return server.serverPort();
+    }
+
     lt::settings_pack sessionSettings()
     {
         lt::settings_pack pack;
-        // same wildcard binding as qBittorrent's default listen interface, so that
-        // the STUN socket (bound to 0.0.0.0:<port>) competes with an equally
-        // specific libtorrent socket, like in production
-        pack.set_str(lt::settings_pack::listen_interfaces, "0.0.0.0:0");
+        // same wildcard binding as qBittorrent's default listen interface. A fixed
+        // port is used since libtorrent may expand 0.0.0.0 into one socket per
+        // local address (which would each get a different ephemeral port).
+        pack.set_str(lt::settings_pack::listen_interfaces, u"0.0.0.0:%1"_s.arg(freePort()).toStdString());
         pack.set_bool(lt::settings_pack::enable_dht, false);
         pack.set_bool(lt::settings_pack::enable_lsd, false);
         pack.set_bool(lt::settings_pack::enable_upnp, false);
@@ -215,12 +223,6 @@ private slots:
         const Net::Stun::Endpoint mapped = waitForMapping(mapper, errorSpy);
         if (!errorSpy.isEmpty())
             qWarning() << "mapper error:" << errorSpy.first().first().toString();
-#ifdef Q_OS_WIN
-        // Best effort on Windows: the reply may be delivered to libtorrent's socket
-        qInfo() << "UDP mapping on Windows:" << mapped.toString();
-        if (!mapped.isValid())
-            QSKIP("UDP reply was not delivered to the STUN socket (best effort on Windows)");
-#endif
         QCOMPARE(mapped.address, QHostAddress(QHostAddress::LocalHost));
         QCOMPARE(mapped.port, listenPort);
     }

@@ -60,9 +60,9 @@ namespace Net
     //      the NAT session alive and detects mapping changes.
     // UDP: a short-lived *connected* UDP socket is used so that the kernel only
     //      delivers the STUN server's datagrams to it; all other datagrams keep
-    //      going to the service's unconnected socket (Linux; best effort on
-    //      Windows). The socket is
-    //      closed right after each transaction so that it never prevents the
+    //      going to the service's unconnected socket (Linux only; Windows
+    //      delivers them to the first bound socket). The socket is closed
+    //      right after each transaction so that it never prevents the
     //      service from re-binding its own socket.
     class StunPortMapper final : public QObject
     {

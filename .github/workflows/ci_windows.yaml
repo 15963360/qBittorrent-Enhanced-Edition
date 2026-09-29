@@ -186,6 +186,7 @@ jobs:
           cmake --build build --target check
 
       - name: Windows STUN port sharing runtime check
+        if: ${{ !cancelled() }}
         run: |
           # verbose output of the STUN/libtorrent listen port sharing test (TCP + UDP)
           build/test/teststunportmapper.exe -o teststunportmapper.txt,txt

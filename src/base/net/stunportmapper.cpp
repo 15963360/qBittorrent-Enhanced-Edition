@@ -364,15 +364,15 @@ Net::StunPortMapper::~StunPortMapper()
 bool Net::StunPortMapper::isSupported(const Protocol protocol)
 {
 #ifdef QBT_STUN_PORT_SHARING_SUPPORTED
-#if defined(Q_OS_LINUX) || defined(Q_OS_WIN)
-    // Windows requires libtorrent `listen_socket_shared` (see SessionImpl).
-    // On Windows the UDP mapping is best effort: delivery of the STUN reply to
-    // the connected socket rather than to libtorrent's socket isn't guaranteed.
+#ifdef Q_OS_LINUX
     Q_UNUSED(protocol);
     return true;
 #else
     // Delivering unicast datagrams to the "right" socket among several bound
-    // to the same port is only well defined on Linux (connected socket wins)
+    // to the same port is only well defined on Linux (connected socket wins).
+    // Windows delivers them to the first bound socket (libtorrent's), so the
+    // STUN reply would never reach us; only TCP can be mapped there.
+    // Windows additionally requires libtorrent `listen_socket_shared` (see SessionImpl).
     return (protocol == Protocol::TCP);
 #endif
 #else
