@@ -38,6 +38,7 @@
 
 #include "base/bittorrent/session.h"
 #include "base/bittorrent/sessionstatus.h"
+#include "base/bittorrent/stunnattraversal.h"
 #include "base/preferences.h"
 #include "base/utils/misc.h"
 #include "speedlimitdialog.h"
@@ -108,6 +109,10 @@ StatusBar::StatusBar(QWidget *parent)
     m_lastExternalIPsLbl->setSizePolicy(QSizePolicy::Maximum, QSizePolicy::Preferred);
     m_lastExternalIPsSeparator = createSeparator(m_lastExternalIPsLbl);
 
+    m_stunLbl = new QLabel(this);
+    m_stunLbl->setSizePolicy(QSizePolicy::Maximum, QSizePolicy::Preferred);
+    m_stunSeparator = createSeparator(m_stunLbl);
+
     m_DHTLbl = new QLabel(tr("DHT: %1 nodes").arg(0), this);
     m_DHTLbl->setSizePolicy(QSizePolicy::Maximum, QSizePolicy::Preferred);
     m_DHTSeparator = createSeparator(m_DHTLbl);
@@ -138,6 +143,9 @@ StatusBar::StatusBar(QWidget *parent)
     layout->addWidget(m_lastExternalIPsLbl);
     layout->addWidget(m_lastExternalIPsSeparator);
 
+    layout->addWidget(m_stunLbl);
+    layout->addWidget(m_stunSeparator);
+
     layout->addWidget(m_DHTLbl);
     layout->addWidget(m_DHTSeparator);
 
@@ -164,6 +172,8 @@ StatusBar::StatusBar(QWidget *parent)
     m_DHTSeparator->setVisible(isDHTVisible);
     refresh();
     connect(session, &BitTorrent::Session::statsUpdated, this, &StatusBar::refresh);
+    updateStunStatus();
+    connect(session, &BitTorrent::Session::stunStatusChanged, this, &StatusBar::updateStunStatus);
 
     updateFreeDiskSpaceLabel(session->freeDiskSpace());
     connect(session, &BitTorrent::Session::freeDiskSpaceChecked, this, &StatusBar::updateFreeDiskSpaceLabel);
@@ -200,7 +210,7 @@ void StatusBar::updateConnectionStatus()
     {
         m_connecStatusLblIcon->setIcon(UIThemeManager::instance()->getIcon(u"disconnected"_s));
         const QString tooltip = u"<b>%1</b><br>%2"_s.arg(tr("Connection Status:"), tr("Offline. This usually means that qBittorrent failed to listen on the selected port for incoming connections."));
-        m_connecStatusLblIcon->setToolTip(tooltip);
+        m_connecStatusLblIcon->setToolTip(tooltip + stunToolTip());
     }
     else
     {
@@ -209,15 +219,37 @@ void StatusBar::updateConnectionStatus()
             // Connection OK
             m_connecStatusLblIcon->setIcon(UIThemeManager::instance()->getIcon(u"connected"_s));
             const QString tooltip = u"<b>%1</b><br>%2"_s.arg(tr("Connection Status:"), tr("Online"));
-            m_connecStatusLblIcon->setToolTip(tooltip);
+            m_connecStatusLblIcon->setToolTip(tooltip + stunToolTip());
         }
         else
         {
             m_connecStatusLblIcon->setIcon(UIThemeManager::instance()->getIcon(u"firewalled"_s));
             const QString tooltip = u"<b>%1</b><br><i>%2</i>"_s.arg(tr("Connection Status:"), tr("No direct connections. This may indicate network configuration problems."));
-            m_connecStatusLblIcon->setToolTip(tooltip);
+            m_connecStatusLblIcon->setToolTip(tooltip + stunToolTip());
         }
     }
+}
+
+QString StatusBar::stunToolTip() const
+{
+    const QString text = BitTorrent::Session::instance()->stunStatus().toolTipText();
+    if (text.isEmpty())
+        return {};
+    return u"<br><br>"_s + text.toHtmlEscaped().replace(u'\n', u"<br>"_s);
+}
+
+void StatusBar::updateStunStatus()
+{
+    const BitTorrent::StunStatus status = BitTorrent::Session::instance()->stunStatus();
+    m_stunLbl->setVisible(status.isEnabled);
+    m_stunSeparator->setVisible(status.isEnabled);
+    if (!status.isEnabled)
+        return;
+
+    const QString address = status.publicAddressString();
+    m_stunLbl->setText(tr("STUN: %1").arg(address.isEmpty() ? tr("N/A") : address));
+    m_stunLbl->setToolTip(status.toolTipText());
+    updateConnectionStatus();
 }
 
 void StatusBar::updateDHTNodesNumber()

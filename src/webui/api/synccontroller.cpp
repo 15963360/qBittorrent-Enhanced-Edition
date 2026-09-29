@@ -40,6 +40,7 @@
 #include "base/bittorrent/peerinfo.h"
 #include "base/bittorrent/session.h"
 #include "base/bittorrent/sessionstatus.h"
+#include "base/bittorrent/stunnattraversal.h"
 #include "base/bittorrent/torrent.h"
 #include "base/bittorrent/torrentinfo.h"
 #include "base/bittorrent/trackerentrystatus.h"
@@ -94,6 +95,10 @@ namespace
     const QString KEY_TRANSFER_UPDATA = u"up_info_data"_s;
     const QString KEY_TRANSFER_UPRATELIMIT = u"up_rate_limit"_s;
     const QString KEY_TRANSFER_UPSPEED = u"up_info_speed"_s;
+    const QString KEY_TRANSFER_STUN_NAT_TYPE = u"stun_nat_type"_s;
+    const QString KEY_TRANSFER_STUN_PUBLIC_ADDRESS = u"stun_public_address"_s;
+    const QString KEY_TRANSFER_STUN_ANNOUNCE_PORT = u"stun_announce_port"_s;
+    const QString KEY_TRANSFER_STUN_LAST_CHECK = u"stun_last_check"_s;
 
     // Statistics keys
     const QString KEY_TRANSFER_ALLTIME_DL = u"alltime_dl"_s;
@@ -193,6 +198,13 @@ namespace
         map[KEY_TRANSFER_CONNECTION_STATUS] = session->isListening()
             ? (sessionStatus.hasIncomingConnections ? u"connected"_s : u"firewalled"_s)
             : u"disconnected"_s;
+
+        // empty "stun_nat_type" means STUN is disabled
+        const BitTorrent::StunStatus stunStatus = session->stunStatus();
+        map[KEY_TRANSFER_STUN_NAT_TYPE] = stunStatus.isEnabled ? Net::natTypeToKey(stunStatus.natType) : QString();
+        map[KEY_TRANSFER_STUN_PUBLIC_ADDRESS] = stunStatus.publicAddressString();
+        map[KEY_TRANSFER_STUN_ANNOUNCE_PORT] = stunStatus.externalPort;
+        map[KEY_TRANSFER_STUN_LAST_CHECK] = stunStatus.lastCheckTime.isValid() ? stunStatus.lastCheckTime.toSecsSinceEpoch() : -1;
 
         return map;
     }

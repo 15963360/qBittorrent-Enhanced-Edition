@@ -445,6 +445,27 @@
     </fieldset>
 
     <fieldset class="settings">
+        <legend>
+            <input type="checkbox" id="stunEnabledCheckbox">
+            <label for="stunEnabledCheckbox">QBT_TR(STUN NAT traversal)QBT_TR[CONTEXT=OptionsDialog]</label>
+        </legend>
+        <div class="formRow">
+            <label for="stunServersTextarea">QBT_TR(STUN servers (host:port, one per line; TCP capable servers are required for TCP mapping):)QBT_TR[CONTEXT=OptionsDialog]</label>
+        </div>
+        <div class="formRow">
+            <textarea id="stunServersTextarea" rows="4" cols="50"></textarea>
+        </div>
+        <div class="formRow">
+            <label for="stunCheckIntervalValue">QBT_TR(NAT type check interval:)QBT_TR[CONTEXT=OptionsDialog]</label>
+            <input type="number" id="stunCheckIntervalValue" style="width: 6em;" min="30" max="86400">&nbsp;QBT_TR(seconds)QBT_TR[CONTEXT=OptionsDialog]
+        </div>
+        <div class="formRow">
+            <input type="checkbox" id="stunAnnouncePortCheckbox">
+            <label for="stunAnnouncePortCheckbox">QBT_TR(Report STUN mapped public port to trackers and DHT)QBT_TR[CONTEXT=OptionsDialog]</label>
+        </div>
+    </fieldset>
+
+    <fieldset class="settings">
         <legend>QBT_TR(Connections Limits)QBT_TR[CONTEXT=OptionsDialog]</legend>
         <table>
             <tbody>
@@ -2484,6 +2505,12 @@ Use ';' to split multiple entries. Can use wildcard '*'.)QBT_TR[CONTEXT=OptionsD
                     document.getElementById("portValue").value = Number(pref.listen_port);
                     document.getElementById("upnpCheckbox").checked = pref.upnp;
 
+                    // STUN NAT traversal
+                    document.getElementById("stunEnabledCheckbox").checked = pref.stun_enabled;
+                    document.getElementById("stunServersTextarea").value = pref.stun_servers;
+                    document.getElementById("stunCheckIntervalValue").value = pref.stun_check_interval;
+                    document.getElementById("stunAnnouncePortCheckbox").checked = pref.stun_announce_port;
+
                     // Connections Limits
                     const maxConnec = Number(pref.max_connec);
                     if (maxConnec <= 0) {
@@ -2889,6 +2916,17 @@ Use ';' to split multiple entries. Can use wildcard '*'.)QBT_TR[CONTEXT=OptionsD
             }
             settings["listen_port"] = listenPort;
             settings["upnp"] = document.getElementById("upnpCheckbox").checked;
+
+            // STUN NAT traversal
+            const stunCheckInterval = Number(document.getElementById("stunCheckIntervalValue").value);
+            if (Number.isNaN(stunCheckInterval) || (stunCheckInterval < 30) || (stunCheckInterval > 86400)) {
+                alert("QBT_TR(STUN check interval must be between 30 and 86400 seconds.)QBT_TR[CONTEXT=HttpServer]");
+                return;
+            }
+            settings["stun_enabled"] = document.getElementById("stunEnabledCheckbox").checked;
+            settings["stun_servers"] = document.getElementById("stunServersTextarea").value;
+            settings["stun_check_interval"] = stunCheckInterval;
+            settings["stun_announce_port"] = document.getElementById("stunAnnouncePortCheckbox").checked;
 
             // Connections Limits
             let maxConnec = -1;
