@@ -188,8 +188,10 @@ jobs:
       - name: Windows STUN port sharing runtime check
         run: |
           # verbose output of the STUN/libtorrent listen port sharing test (TCP + UDP)
-          build/test/teststunportmapper.exe
-          if ($LASTEXITCODE -ne 0) { throw "teststunportmapper failed" }
+          build/test/teststunportmapper.exe -o teststunportmapper.txt,txt
+          $rc = $LASTEXITCODE
+          Get-Content teststunportmapper.txt
+          if ($rc -ne 0) { throw "teststunportmapper failed" }
 
       - name: Prepare build artifacts
         run: |

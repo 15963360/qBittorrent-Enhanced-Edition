@@ -123,7 +123,10 @@ namespace
     lt::settings_pack sessionSettings()
     {
         lt::settings_pack pack;
-        pack.set_str(lt::settings_pack::listen_interfaces, "127.0.0.1:0");
+        // same wildcard binding as qBittorrent's default listen interface, so that
+        // the STUN socket (bound to 0.0.0.0:<port>) competes with an equally
+        // specific libtorrent socket, like in production
+        pack.set_str(lt::settings_pack::listen_interfaces, "0.0.0.0:0");
         pack.set_bool(lt::settings_pack::enable_dht, false);
         pack.set_bool(lt::settings_pack::enable_lsd, false);
         pack.set_bool(lt::settings_pack::enable_upnp, false);
