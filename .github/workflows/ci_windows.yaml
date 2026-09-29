@@ -185,6 +185,12 @@ jobs:
           cmake --build build
           cmake --build build --target check
 
+      - name: Windows STUN port sharing runtime check
+        run: |
+          # verbose output of the STUN/libtorrent listen port sharing test (TCP + UDP)
+          build/test/teststunportmapper.exe
+          if ($LASTEXITCODE -ne 0) { throw "teststunportmapper failed" }
+
       - name: Prepare build artifacts
         run: |
           mkdir upload

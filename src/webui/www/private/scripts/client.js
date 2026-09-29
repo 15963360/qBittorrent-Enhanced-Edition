@@ -1166,9 +1166,11 @@ window.addEventListener("DOMContentLoaded", async (event) => {
             const stunAddress = (serverState.stun_public_address !== "") ? serverState.stun_public_address : "QBT_TR(N/A)QBT_TR[CONTEXT=HttpServer]";
             stunElement.textContent = "QBT_TR(STUN: %1)QBT_TR[CONTEXT=StatusBar]".replace("%1", stunAddress);
             const lastCheck = (serverState.stun_last_check > 0) ? new Date(serverState.stun_last_check * 1000).toLocaleString() : "QBT_TR(N/A)QBT_TR[CONTEXT=HttpServer]";
-            stunElement.title = "QBT_TR(NAT type: %1)QBT_TR[CONTEXT=StatusBar]".replace("%1", serverState.stun_nat_type)
-                + "\n" + "QBT_TR(Port announced to trackers: %1)QBT_TR[CONTEXT=StatusBar]".replace("%1", serverState.stun_announce_port)
-                + "\n" + "QBT_TR(Last check: %1)QBT_TR[CONTEXT=StatusBar]".replace("%1", lastCheck);
+            stunElement.title = [
+                "QBT_TR(NAT type: %1)QBT_TR[CONTEXT=StatusBar]".replace("%1", serverState.stun_nat_type),
+                "QBT_TR(Port announced to trackers: %1)QBT_TR[CONTEXT=StatusBar]".replace("%1", serverState.stun_announce_port),
+                "QBT_TR(Last check: %1)QBT_TR[CONTEXT=StatusBar]".replace("%1", lastCheck)
+            ].join("\n");
             stunElement.classList.remove("invisible");
             stunElement.previousElementSibling.classList.remove("invisible");
         }
