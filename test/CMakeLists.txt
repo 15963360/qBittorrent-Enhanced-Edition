@@ -15,6 +15,7 @@ set(testFiles
     testorderedset.cpp
     testpath.cpp
     teststunmessage.cpp
+    teststunportmapper.cpp
     testutilsbytearray.cpp
     testutilscompare.cpp
     testutilsdatetime.cpp
