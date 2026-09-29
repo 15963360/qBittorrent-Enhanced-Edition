@@ -1897,6 +1897,77 @@ readme[0-9].txt: filter 'readme1.txt', 'readme2.txt' but not 'readme10.txt'.</st
                  </property>
                 </widget>
                </item>
+               <item>
+                <widget class="QGroupBox" name="groupSTUN">
+                 <property name="title">
+                  <string>STUN NAT Traversal (Full Cone / CGNAT)</string>
+                 </property>
+                 <layout class="QVBoxLayout" name="stunLayout">
+                  <item>
+                   <widget class="QCheckBox" name="checkSTUN">
+                    <property name="text">
+                     <string>Enable STUN NAT traversal (Full Cone NAT hole punching)</string>
+                    </property>
+                   </widget>
+                  </item>
+                  <item>
+                   <layout class="QGridLayout" name="stunGridLayout">
+                    <item row="0" column="0">
+                     <widget class="QLabel" name="lblSTUNServers">
+                      <property name="text">
+                       <string>STUN Servers (semicolon-separated):</string>
+                      </property>
+                     </widget>
+                    </item>
+                    <item row="0" column="1">
+                     <widget class="QLineEdit" name="textSTUNServers"/>
+                    </item>
+                    <item row="1" column="0">
+                     <widget class="QLabel" name="lblSTUNKeepAlive">
+                      <property name="text">
+                       <string>Keepalive interval:</string>
+                      </property>
+                     </widget>
+                    </item>
+                    <item row="1" column="1">
+                     <widget class="QSpinBox" name="spinSTUNKeepAlive">
+                      <property name="suffix">
+                       <string> s</string>
+                      </property>
+                      <property name="minimum">
+                       <number>10</number>
+                      </property>
+                      <property name="maximum">
+                       <number>300</number>
+                      </property>
+                      <property name="value">
+                       <number>25</number>
+                      </property>
+                     </widget>
+                    </item>
+                   </layout>
+                  </item>
+                  <item>
+                   <layout class="QHBoxLayout" name="stunTestLayout">
+                    <item>
+                     <widget class="QPushButton" name="btnTestNATType">
+                      <property name="text">
+                       <string>Test NAT Type (RFC 5780)</string>
+                      </property>
+                     </widget>
+                    </item>
+                    <item>
+                     <widget class="QLabel" name="lblNATTestResult">
+                      <property name="text">
+                       <string>NAT Type: Not tested</string>
+                      </property>
+                     </widget>
+                    </item>
+                   </layout>
+                  </item>
+                 </layout>
+                </widget>
+               </item>
               </layout>
              </widget>
             </item>

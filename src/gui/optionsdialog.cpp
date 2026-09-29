@@ -846,6 +846,11 @@ void OptionsDialog::loadConnectionTabOptions()
     m_ui->spinPort->setValue(session->port());
     m_ui->checkUPnP->setChecked(Net::PortForwarder::instance()->isEnabled());
 
+    m_ui->checkSTUN->setChecked(session->isSTUNEnabled());
+    m_ui->textSTUNServers->setText(session->stunServers().join(u';'));
+    m_ui->spinSTUNKeepAlive->setValue(session->stunKeepAliveInterval());
+    m_ui->lblNATTestResult->setText(BitTorrent::natTypeToString(session->stunNATType()));
+
     int intValue = session->maxConnections();
     if (intValue > 0)
     {
@@ -950,6 +955,21 @@ void OptionsDialog::loadConnectionTabOptions()
     connect(m_ui->spinPort, qSpinBoxValueChanged, this, &ThisType::enableApplyButton);
     connect(m_ui->checkUPnP, &QAbstractButton::toggled, this, &ThisType::enableApplyButton);
 
+    connect(m_ui->checkSTUN, &QAbstractButton::toggled, this, &ThisType::enableApplyButton);
+    connect(m_ui->textSTUNServers, &QLineEdit::textChanged, this, &ThisType::enableApplyButton);
+    connect(m_ui->spinSTUNKeepAlive, qSpinBoxValueChanged, this, &ThisType::enableApplyButton);
+
+    connect(m_ui->btnTestNATType, &QAbstractButton::clicked, this, [this]()
+    {
+        m_ui->lblNATTestResult->setText(tr("正在进行 NAT 类型诊断 (RFC 5780)..."));
+        BitTorrent::Session::instance()->runSTUNNATTypeTest();
+    });
+    connect(BitTorrent::Session::instance(), &BitTorrent::Session::stunNATTypeDetected,
+            this, [this](BitTorrent::NATType type, const QString &details)
+    {
+        m_ui->lblNATTestResult->setText(QStringLiteral("%1: %2").arg(BitTorrent::natTypeToString(type), details));
+    });
+
     connect(m_ui->checkMaxConnections, &QAbstractButton::toggled, m_ui->spinMaxConnec, &QWidget::setEnabled);
     connect(m_ui->checkMaxConnections, &QAbstractButton::toggled, this, &ThisType::enableApplyButton);
     connect(m_ui->checkMaxConnectionsPerTorrent, &QAbstractButton::toggled, m_ui->spinMaxConnecPerTorrent, &QWidget::setEnabled);
@@ -1001,6 +1021,10 @@ void OptionsDialog::saveConnectionTabOptions() const
     session->setBTProtocol(static_cast<BitTorrent::BTProtocol>(m_ui->comboProtocol->currentIndex()));
     session->setPort(getPort());
     Net::PortForwarder::instance()->setEnabled(isUPnPEnabled());
+
+    session->setSTUNEnabled(m_ui->checkSTUN->isChecked());
+    session->setStunServers(m_ui->textSTUNServers->text().split(u';', Qt::SkipEmptyParts));
+    session->setStunKeepAliveInterval(m_ui->spinSTUNKeepAlive->value());
 
     session->setMaxConnections(getMaxConnections());
     session->setMaxConnectionsPerTorrent(getMaxConnectionsPerTorrent());

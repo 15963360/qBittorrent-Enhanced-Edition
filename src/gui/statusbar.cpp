@@ -204,11 +204,22 @@ void StatusBar::updateConnectionStatus()
     }
     else
     {
-        if (sessionStatus.hasIncomingConnections)
+        const auto *session = BitTorrent::Session::instance();
+        const bool isSTUNActive = session->isSTUNEnabled() && (session->stunMappedPort() > 0);
+
+        if (sessionStatus.hasIncomingConnections || isSTUNActive)
         {
             // Connection OK
             m_connecStatusLblIcon->setIcon(UIThemeManager::instance()->getIcon(u"connected"_s));
-            const QString tooltip = u"<b>%1</b><br>%2"_s.arg(tr("Connection Status:"), tr("Online"));
+            QString tooltip = u"<b>%1</b><br>%2"_s.arg(tr("Connection Status:"), tr("Online"));
+            if (isSTUNActive)
+            {
+                tooltip += u"<br>%1: %2:%3 (%4)"_s.arg(
+                    tr("STUN Mapped Endpoint"),
+                    session->stunMappedAddress().toString(),
+                    QString::number(session->stunMappedPort()),
+                    BitTorrent::natTypeToString(session->stunNATType()));
+            }
             m_connecStatusLblIcon->setToolTip(tooltip);
         }
         else
@@ -260,6 +271,10 @@ void StatusBar::updateExternalAddressesLabel()
         addressText = tr("External IPs: %1, %2").arg(lastExternalIPv4Address, lastExternalIPv6Address);
     else if (hasIPv4Address || hasIPv6Address)
         addressText = tr("External IP: %1%2").arg(lastExternalIPv4Address, lastExternalIPv6Address);
+
+    const auto *session = BitTorrent::Session::instance();
+    if (session->isSTUNEnabled() && (session->stunMappedPort() > 0))
+        addressText += u" (STUN: :" + QString::number(session->stunMappedPort()) + u')';
 
     m_lastExternalIPsLbl->setText(addressText);
 }

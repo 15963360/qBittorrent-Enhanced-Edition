@@ -498,6 +498,9 @@ SessionImpl::SessionImpl(QObject *parent)
     , m_includeOverheadInLimits(BITTORRENT_SESSION_KEY(u"IncludeOverheadInLimits"_s), false)
     , m_announceIP(BITTORRENT_SESSION_KEY(u"AnnounceIP"_s))
     , m_announcePort(BITTORRENT_SESSION_KEY(u"AnnouncePort"_s), 0)
+    , m_isSTUNEnabled(BITTORRENT_SESSION_KEY(u"STUNEnabled"_s), false)
+    , m_stunServers(BITTORRENT_SESSION_KEY(u"STUNServers"_s), STUNManager::DEFAULT_STUN_SERVERS.join(u';'))
+    , m_stunKeepAliveInterval(BITTORRENT_SESSION_KEY(u"STUNKeepAliveInterval"_s), STUNManager::DEFAULT_KEEPALIVE_INTERVAL_SEC)
     , m_maxConcurrentHTTPAnnounces(BITTORRENT_SESSION_KEY(u"MaxConcurrentHTTPAnnounces"_s), 50)
     , m_isReannounceWhenAddressChangedEnabled(BITTORRENT_SESSION_KEY(u"ReannounceWhenAddressChanged"_s), false)
     , m_stopTrackerTimeout(BITTORRENT_SESSION_KEY(u"StopTrackerTimeout"_s), 2)
@@ -654,6 +657,23 @@ SessionImpl::SessionImpl(QObject *parent)
     connect(Net::ProxyConfigurationManager::instance()
         , &Net::ProxyConfigurationManager::proxyConfigurationChanged
         , this, &SessionImpl::configureDeferred);
+
+    m_stunManager = std::make_unique<STUNManager>(this);
+    m_stunManager->setLocalPort(static_cast<quint16>(port()));
+    m_stunManager->setStunServers(m_stunServers.get().split(u';', Qt::SkipEmptyParts));
+    m_stunManager->setKeepAliveInterval(m_stunKeepAliveInterval);
+
+    connect(m_stunManager.get(), &STUNManager::mappedEndpointChanged,
+            this, &SessionImpl::onSTUNMappedEndpointChanged);
+    connect(m_stunManager.get(), &STUNManager::statusChanged,
+            this, &SessionImpl::onSTUNStatusChanged);
+    connect(m_stunManager.get(), &STUNManager::natTypeDetected,
+            this, &SessionImpl::onSTUNNATTypeDetected);
+    connect(m_stunManager.get(), &STUNManager::logMessage,
+            this, &SessionImpl::onSTUNLogMessage);
+
+    if (m_isSTUNEnabled)
+        m_stunManager->start();
 
     m_freeDiskSpaceChecker->moveToThread(m_ioThread.get());
     connect(m_ioThread.get(), &QThread::finished, m_freeDiskSpaceChecker, &QObject::deleteLater);
@@ -2124,7 +2144,10 @@ lt::settings_pack SessionImpl::loadLTSettings() const
     settingsPack.set_str(lt::settings_pack::announce_ip, announceIP().toStdString());
 #if LIBTORRENT_VERSION_NUM >= 20011
     // Port to announce to trackers
-    settingsPack.set_int(lt::settings_pack::announce_port, announcePort());
+    const int effectiveAnnouncePort = (isSTUNEnabled() && (m_stunExternalPort > 0))
+                                      ? static_cast<int>(m_stunExternalPort)
+                                      : announcePort();
+    settingsPack.set_int(lt::settings_pack::announce_port, effectiveAnnouncePort);
 #endif
     // Max concurrent HTTP announces
     settingsPack.set_int(lt::settings_pack::max_concurrent_http_announces, maxConcurrentHTTPAnnounces());
@@ -2147,6 +2170,10 @@ lt::settings_pack SessionImpl::loadLTSettings() const
 
     case BTProtocol::TCP:
         settingsPack.set_bool(lt::settings_pack::enable_incoming_tcp, true);
+        settingsPack.set_bool(lt::settings_pack::enable_outgoing_tcp, true);
+        settingsPack.set_bool(lt::settings_pack::enable_incoming_utp, isSTUNEnabled());
+        settingsPack.set_bool(lt::settings_pack::enable_outgoing_utp, false);
+        break;
         settingsPack.set_bool(lt::settings_pack::enable_outgoing_tcp, true);
         settingsPack.set_bool(lt::settings_pack::enable_incoming_utp, false);
         settingsPack.set_bool(lt::settings_pack::enable_outgoing_utp, false);
@@ -2276,6 +2303,12 @@ void SessionImpl::applyNetworkInterfacesSettings(lt::settings_pack &settingsPack
             outgoingInterfaces << ip;
 #endif
         }
+    }
+
+    if (isSTUNEnabled() && (m_stunExternalPort > 0) && (m_stunExternalPort != port()))
+    {
+        // Bind the discovered STUN port on IPv6 so incoming IPv6 peers connecting to the announced port succeed
+        endpoints << (QStringLiteral("[::]:") + QString::number(m_stunExternalPort));
     }
 
     const QString finalEndpoints = endpoints.join(u',');
@@ -3757,6 +3790,8 @@ void SessionImpl::setPort(const int port)
     if (port != m_port)
     {
         m_port = port;
+        if (m_stunManager)
+            m_stunManager->setLocalPort(static_cast<quint16>(port));
         configureListeningInterface();
     }
 }
@@ -5015,6 +5050,120 @@ void SessionImpl::setAnnouncePort(const int port)
         m_announcePort = port;
         configureDeferred();
     }
+}
+
+bool SessionImpl::isSTUNEnabled() const
+{
+    return m_isSTUNEnabled;
+}
+
+void SessionImpl::setSTUNEnabled(const bool enabled)
+{
+    if (enabled != m_isSTUNEnabled)
+    {
+        m_isSTUNEnabled = enabled;
+        if (m_stunManager)
+            m_stunManager->setEnabled(enabled);
+
+        if (!enabled)
+        {
+            m_stunExternalPort = 0;
+            m_stunExternalAddress.clear();
+        }
+
+        configureListeningInterface();
+        configureDeferred();
+    }
+}
+
+QStringList SessionImpl::stunServers() const
+{
+    return m_stunServers.get().split(u';', Qt::SkipEmptyParts);
+}
+
+void SessionImpl::setStunServers(const QStringList &servers)
+{
+    const QString serversStr = servers.join(u';');
+    if (serversStr != m_stunServers)
+    {
+        m_stunServers = serversStr;
+        if (m_stunManager)
+            m_stunManager->setStunServers(servers);
+    }
+}
+
+int SessionImpl::stunKeepAliveInterval() const
+{
+    return m_stunKeepAliveInterval;
+}
+
+void SessionImpl::setStunKeepAliveInterval(const int seconds)
+{
+    if (seconds != m_stunKeepAliveInterval)
+    {
+        m_stunKeepAliveInterval = seconds;
+        if (m_stunManager)
+            m_stunManager->setKeepAliveInterval(seconds);
+    }
+}
+
+quint16 SessionImpl::stunMappedPort() const
+{
+    return m_stunExternalPort;
+}
+
+QHostAddress SessionImpl::stunMappedAddress() const
+{
+    return m_stunExternalAddress;
+}
+
+STUNStatus SessionImpl::stunStatus() const
+{
+    return m_stunManager ? m_stunManager->status() : STUNStatus::Disabled;
+}
+
+NATType SessionImpl::stunNATType() const
+{
+    return m_stunManager ? m_stunManager->natType() : NATType::Unknown;
+}
+
+void SessionImpl::runSTUNNATTypeTest()
+{
+    if (m_stunManager)
+        m_stunManager->runNATTypeTest();
+}
+
+void SessionImpl::onSTUNMappedEndpointChanged(const QHostAddress &ip, quint16 port)
+{
+    m_stunExternalAddress = ip;
+    const bool portChanged = (m_stunExternalPort != port);
+    m_stunExternalPort = port;
+
+    emit stunMappedEndpointChanged(ip, port);
+
+    if (portChanged)
+    {
+        configureListeningInterface();
+        configureDeferred();
+
+        if (isReannounceWhenAddressChangedEnabled())
+            reannounceToAllTrackers();
+    }
+}
+
+void SessionImpl::onSTUNStatusChanged(BitTorrent::STUNStatus status)
+{
+    emit stunStatusChanged(status);
+}
+
+void SessionImpl::onSTUNNATTypeDetected(BitTorrent::NATType type, const QString &details)
+{
+    emit stunNATTypeDetected(type, details);
+}
+
+void SessionImpl::onSTUNLogMessage(const QString &msg, bool isWarning)
+{
+    LogMsg(msg, isWarning ? Log::WARNING : Log::INFO);
 }
 
 int SessionImpl::maxConcurrentHTTPAnnounces() const

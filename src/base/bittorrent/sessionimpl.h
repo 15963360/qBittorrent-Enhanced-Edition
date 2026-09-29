@@ -372,6 +372,19 @@ namespace BitTorrent
         void setAnnounceIP(const QString &ip) override;
         int announcePort() const override;
         void setAnnouncePort(int port) override;
+
+        // STUN NAT Traversal
+        bool isSTUNEnabled() const override;
+        void setSTUNEnabled(bool enabled) override;
+        QStringList stunServers() const override;
+        void setStunServers(const QStringList &servers) override;
+        int stunKeepAliveInterval() const override;
+        void setStunKeepAliveInterval(int seconds) override;
+        quint16 stunMappedPort() const override;
+        QHostAddress stunMappedAddress() const override;
+        STUNStatus stunStatus() const override;
+        NATType stunNATType() const override;
+        void runSTUNNATTypeTest() override;
         int maxConcurrentHTTPAnnounces() const override;
         void setMaxConcurrentHTTPAnnounces(int value) override;
         bool isReannounceWhenAddressChangedEnabled() const override;
@@ -539,6 +552,10 @@ namespace BitTorrent
         void handleIPFilterParsed(int ruleCount);
         void handleIPFilterError();
         void torrentContentRemovingFinished(const QString &torrentName, const QString &errorMessage);
+        void onSTUNMappedEndpointChanged(const QHostAddress &ip, quint16 port);
+        void onSTUNStatusChanged(BitTorrent::STUNStatus status);
+        void onSTUNNATTypeDetected(BitTorrent::NATType type, const QString &details);
+        void onSTUNLogMessage(const QString &msg, bool isWarning);
 
     private:
         struct ResumeSessionContext;
@@ -714,6 +731,12 @@ namespace BitTorrent
         CachedSettingValue<bool> m_includeOverheadInLimits;
         CachedSettingValue<QString> m_announceIP;
         CachedSettingValue<int> m_announcePort;
+        CachedSettingValue<bool> m_isSTUNEnabled;
+        CachedSettingValue<QString> m_stunServers;
+        CachedSettingValue<int> m_stunKeepAliveInterval;
+        quint16 m_stunExternalPort {0};
+        QHostAddress m_stunExternalAddress;
+        std::unique_ptr<STUNManager> m_stunManager;
         CachedSettingValue<int> m_maxConcurrentHTTPAnnounces;
         CachedSettingValue<bool> m_isReannounceWhenAddressChangedEnabled;
         CachedSettingValue<int> m_stopTrackerTimeout;

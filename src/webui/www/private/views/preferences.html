@@ -442,6 +442,23 @@
             <input type="checkbox" id="upnpCheckbox">
             <label for="upnpCheckbox">QBT_TR(Use UPnP / NAT-PMP port forwarding from my router)QBT_TR[CONTEXT=OptionsDialog]</label>
         </div>
+        <div class="formRow">
+            <input type="checkbox" id="stunEnabledCheckbox">
+            <label for="stunEnabledCheckbox">QBT_TR(Enable STUN NAT traversal (Full Cone NAT hole punching))QBT_TR[CONTEXT=OptionsDialog]</label>
+        </div>
+        <div class="formRow">
+            <label for="stunServersValue">QBT_TR(STUN Servers (semicolon-separated):)QBT_TR[CONTEXT=OptionsDialog]</label>
+            <input type="text" id="stunServersValue" style="width: 25em;">
+        </div>
+        <div class="formRow">
+            <label for="stunKeepAliveValue">QBT_TR(Keepalive interval:)QBT_TR[CONTEXT=OptionsDialog]</label>
+            <input type="number" id="stunKeepAliveValue" min="10" max="300" style="width: 5em;"> s
+        </div>
+        <div class="formRow" id="rowSTUNStatus">
+            <span><b>QBT_TR(STUN Status:)QBT_TR[CONTEXT=OptionsDialog]</b> <span id="stunStatusText">-</span></span>
+            &nbsp;|&nbsp;
+            <span><b>QBT_TR(NAT Type:)QBT_TR[CONTEXT=OptionsDialog]</b> <span id="stunNATTypeText">-</span></span>
+        </div>
     </fieldset>
 
     <fieldset class="settings">
@@ -2483,6 +2500,11 @@ Use ';' to split multiple entries. Can use wildcard '*'.)QBT_TR[CONTEXT=OptionsD
                     // Listening Port
                     document.getElementById("portValue").value = Number(pref.listen_port);
                     document.getElementById("upnpCheckbox").checked = pref.upnp;
+                    document.getElementById("stunEnabledCheckbox").checked = Boolean(pref.stun_enabled);
+                    document.getElementById("stunServersValue").value = pref.stun_servers || "";
+                    document.getElementById("stunKeepAliveValue").value = Number(pref.stun_keepalive_interval) || 25;
+                    document.getElementById("stunStatusText").textContent = pref.stun_status || "-";
+                    document.getElementById("stunNATTypeText").textContent = pref.stun_nat_type || "-";
 
                     // Connections Limits
                     const maxConnec = Number(pref.max_connec);
@@ -2889,6 +2911,9 @@ Use ';' to split multiple entries. Can use wildcard '*'.)QBT_TR[CONTEXT=OptionsD
             }
             settings["listen_port"] = listenPort;
             settings["upnp"] = document.getElementById("upnpCheckbox").checked;
+            settings["stun_enabled"] = document.getElementById("stunEnabledCheckbox").checked;
+            settings["stun_servers"] = document.getElementById("stunServersValue").value;
+            settings["stun_keepalive_interval"] = Number(document.getElementById("stunKeepAliveValue").value);
 
             // Connections Limits
             let maxConnec = -1;

@@ -40,6 +40,7 @@
 #include "addtorrentparams.h"
 #include "categoryoptions.h"
 #include "sharelimits.h"
+#include "stun/stunmanager.h"
 #include "torrentcontentremoveoption.h"
 #include "trackerentry.h"
 #include "trackerentrystatus.h"
@@ -416,6 +417,19 @@ namespace BitTorrent
         virtual void setAnnounceIP(const QString &ip) = 0;
         virtual int announcePort() const = 0;
         virtual void setAnnouncePort(int port) = 0;
+
+        // STUN NAT Traversal
+        virtual bool isSTUNEnabled() const = 0;
+        virtual void setSTUNEnabled(bool enabled) = 0;
+        virtual QStringList stunServers() const = 0;
+        virtual void setStunServers(const QStringList &servers) = 0;
+        virtual int stunKeepAliveInterval() const = 0;
+        virtual void setStunKeepAliveInterval(int seconds) = 0;
+        virtual quint16 stunMappedPort() const = 0;
+        virtual QHostAddress stunMappedAddress() const = 0;
+        virtual STUNStatus stunStatus() const = 0;
+        virtual NATType stunNATType() const = 0;
+        virtual void runSTUNNATTypeTest() = 0;
         virtual int maxConcurrentHTTPAnnounces() const = 0;
         virtual void setMaxConcurrentHTTPAnnounces(int value) = 0;
         virtual bool isReannounceWhenAddressChangedEnabled() const = 0;
@@ -546,5 +560,10 @@ namespace BitTorrent
         void trackerWarning(Torrent *torrent, const QString &tracker);
         void trackerEntryStatusesUpdated(Torrent *torrent, const QHash<QString, TrackerEntryStatus> &updatedTrackers);
         void freeDiskSpaceChecked(qint64 result);
+
+        // STUN signals
+        void stunMappedEndpointChanged(const QHostAddress &ip, quint16 port);
+        void stunStatusChanged(BitTorrent::STUNStatus status);
+        void stunNATTypeDetected(BitTorrent::NATType type, const QString &details);
     };
 }

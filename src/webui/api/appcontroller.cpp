@@ -236,6 +236,15 @@ void AppController::preferencesAction()
     data[u"ssl_listen_port"_s] = session->sslPort();
     data[u"random_port"_s] = (session->port() == 0);  // deprecated
     data[u"upnp"_s] = Net::PortForwarder::instance()->isEnabled();
+
+    // STUN NAT Traversal
+    data[u"stun_enabled"_s] = session->isSTUNEnabled();
+    data[u"stun_servers"_s] = session->stunServers().join(u';');
+    data[u"stun_keepalive_interval"_s] = session->stunKeepAliveInterval();
+    data[u"stun_mapped_port"_s] = session->stunMappedPort();
+    data[u"stun_mapped_address"_s] = session->stunMappedAddress().toString();
+    data[u"stun_nat_type"_s] = BitTorrent::natTypeToString(session->stunNATType());
+    data[u"stun_status"_s] = BitTorrent::stunStatusToString(session->stunStatus());
     // Connections Limits
     data[u"max_connec"_s] = session->maxConnections();
     data[u"max_connec_per_torrent"_s] = session->maxConnectionsPerTorrent();
@@ -721,6 +730,14 @@ void AppController::setPreferencesAction()
         session->setSSLPort(it.value().toInt());
     if (hasKey(u"upnp"_s))
         Net::PortForwarder::instance()->setEnabled(it.value().toBool());
+
+    // STUN NAT Traversal
+    if (hasKey(u"stun_enabled"_s))
+        session->setSTUNEnabled(it.value().toBool());
+    if (hasKey(u"stun_servers"_s))
+        session->setStunServers(it.value().toString().split(u';', Qt::SkipEmptyParts));
+    if (hasKey(u"stun_keepalive_interval"_s))
+        session->setStunKeepAliveInterval(it.value().toInt());
     // Connections Limits
     if (hasKey(u"max_connec"_s))
         session->setMaxConnections(it.value().toInt());

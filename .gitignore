@@ -1,4 +1,6 @@
 .vscode/
+.zcode/
+__pycache__/
 
 src/gui/geoip/GeoIP.dat
 src/gui/geoip/GeoIP.dat.gz
