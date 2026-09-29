@@ -49,6 +49,7 @@ class QString;
 namespace BitTorrent
 {
     class InfoHash;
+    struct StunStatus;
     class Torrent;
     class TorrentDescriptor;
     class TorrentID;
@@ -416,6 +417,16 @@ namespace BitTorrent
         virtual void setAnnounceIP(const QString &ip) = 0;
         virtual int announcePort() const = 0;
         virtual void setAnnouncePort(int port) = 0;
+        virtual bool isStunEnabled() const = 0;
+        virtual void setStunEnabled(bool enabled) = 0;
+        virtual QStringList stunServers() const = 0;
+        virtual void setStunServers(const QStringList &servers) = 0;
+        virtual int stunCheckInterval() const = 0;
+        virtual void setStunCheckInterval(int seconds) = 0;
+        virtual bool isStunAnnouncePortEnabled() const = 0;
+        virtual void setStunAnnouncePortEnabled(bool enabled) = 0;
+        virtual StunStatus stunStatus() const = 0;
+        virtual void checkStunNow() = 0;
         virtual int maxConcurrentHTTPAnnounces() const = 0;
         virtual void setMaxConcurrentHTTPAnnounces(int value) = 0;
         virtual bool isReannounceWhenAddressChangedEnabled() const = 0;
@@ -546,5 +557,6 @@ namespace BitTorrent
         void trackerWarning(Torrent *torrent, const QString &tracker);
         void trackerEntryStatusesUpdated(Torrent *torrent, const QHash<QString, TrackerEntryStatus> &updatedTrackers);
         void freeDiskSpaceChecked(qint64 result);
+        void stunStatusChanged();
     };
 }

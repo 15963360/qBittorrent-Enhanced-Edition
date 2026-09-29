@@ -111,6 +111,7 @@
 #include "peer_shadowban_plugin.hpp"
 #include "portforwarderimpl.h"
 #include "resumedatastorage.h"
+#include "stunnattraversal.h"
 #include "torrentcontentremover.h"
 #include "torrentdescriptor.h"
 #include "torrentimpl.h"
@@ -498,6 +499,10 @@ SessionImpl::SessionImpl(QObject *parent)
     , m_includeOverheadInLimits(BITTORRENT_SESSION_KEY(u"IncludeOverheadInLimits"_s), false)
     , m_announceIP(BITTORRENT_SESSION_KEY(u"AnnounceIP"_s))
     , m_announcePort(BITTORRENT_SESSION_KEY(u"AnnouncePort"_s), 0)
+    , m_isStunEnabled(BITTORRENT_SESSION_KEY(u"STUNEnabled"_s), false)
+    , m_stunServers(BITTORRENT_SESSION_KEY(u"STUNServers"_s), StunNatTraversal::defaultServers())
+    , m_stunCheckInterval(BITTORRENT_SESSION_KEY(u"STUNCheckInterval"_s), 300, clampValue(30, 86400))
+    , m_isStunAnnouncePortEnabled(BITTORRENT_SESSION_KEY(u"STUNAnnouncePort"_s), true)
     , m_maxConcurrentHTTPAnnounces(BITTORRENT_SESSION_KEY(u"MaxConcurrentHTTPAnnounces"_s), 50)
     , m_isReannounceWhenAddressChangedEnabled(BITTORRENT_SESSION_KEY(u"ReannounceWhenAddressChanged"_s), false)
     , m_stopTrackerTimeout(BITTORRENT_SESSION_KEY(u"StopTrackerTimeout"_s), 2)
@@ -687,6 +692,13 @@ SessionImpl::SessionImpl(QObject *parent)
     // initialize PortForwarder instance
     new PortForwarderImpl(this);
 
+    // STUN NAT traversal (coexists with UPnP/NAT-PMP port forwarding)
+    m_stunNatTraversal = new StunNatTraversal(this);
+    connect(m_stunNatTraversal, &StunNatTraversal::statusChanged, this, &Session::stunStatusChanged);
+    connect(m_stunNatTraversal, &StunNatTraversal::externalPortChanged, this, &SessionImpl::handleStunExternalPortChanged);
+    m_stunListenPort = m_nativeSession->listen_port();
+    configureStun();
+
     // start embedded tracker
     enableTracker(isTrackerEnabled());
 
@@ -743,6 +755,9 @@ SessionImpl::~SessionImpl()
     // We must delete PortForwarderImpl before
     // we delete lt::session
     delete Net::PortForwarder::instance();
+
+    delete m_stunNatTraversal;
+    m_stunNatTraversal = nullptr;
 
     // We must stop "async worker" only after deletion
     // of all the components that could potentially use it
@@ -1375,6 +1390,13 @@ void SessionImpl::configure()
 
     m_nativeSession->apply_settings(loadLTSettings());
     configureComponents();
+
+    if (isListenInterfaceChanged)
+    {
+        // listen_port() is a synchronous call executed after the settings above are applied
+        m_stunListenPort = m_nativeSession->listen_port();
+        configureStun();
+    }
 
     if (isListenInterfaceChanged && isReannounceWhenAddressChangedEnabled())
         reannounceToAllTrackers();
@@ -2124,7 +2146,7 @@ lt::settings_pack SessionImpl::loadLTSettings() const
     settingsPack.set_str(lt::settings_pack::announce_ip, announceIP().toStdString());
 #if LIBTORRENT_VERSION_NUM >= 20011
     // Port to announce to trackers
-    settingsPack.set_int(lt::settings_pack::announce_port, announcePort());
+    settingsPack.set_int(lt::settings_pack::announce_port, effectiveAnnouncePort());
 #endif
     // Max concurrent HTTP announces
     settingsPack.set_int(lt::settings_pack::max_concurrent_http_announces, maxConcurrentHTTPAnnounces());
@@ -5017,6 +5039,138 @@ void SessionImpl::setAnnouncePort(const int port)
     }
 }
 
+bool SessionImpl::isStunEnabled() const
+{
+    return m_isStunEnabled;
+}
+
+void SessionImpl::setStunEnabled(const bool enabled)
+{
+    if (enabled == m_isStunEnabled)
+        return;
+
+    m_isStunEnabled = enabled;
+    configureStun();
+    updateAnnouncePort();
+}
+
+QStringList SessionImpl::stunServers() const
+{
+    return m_stunServers;
+}
+
+void SessionImpl::setStunServers(const QStringList &servers)
+{
+    QStringList cleanServers;
+    for (const QString &server : servers)
+    {
+        const QString trimmed = server.trimmed();
+        if (!trimmed.isEmpty() && !cleanServers.contains(trimmed))
+            cleanServers.append(trimmed);
+    }
+
+    if (cleanServers.isEmpty())
+        cleanServers = StunNatTraversal::defaultServers();
+
+    if (cleanServers == m_stunServers)
+        return;
+
+    m_stunServers = cleanServers;
+    configureStun();
+}
+
+int SessionImpl::stunCheckInterval() const
+{
+    return m_stunCheckInterval;
+}
+
+void SessionImpl::setStunCheckInterval(const int seconds)
+{
+    const int value = std::clamp(seconds, 30, 86400);
+    if (value == m_stunCheckInterval)
+        return;
+
+    m_stunCheckInterval = value;
+    configureStun();
+}
+
+bool SessionImpl::isStunAnnouncePortEnabled() const
+{
+    return m_isStunAnnouncePortEnabled;
+}
+
+void SessionImpl::setStunAnnouncePortEnabled(const bool enabled)
+{
+    if (enabled == m_isStunAnnouncePortEnabled)
+        return;
+
+    m_isStunAnnouncePortEnabled = enabled;
+    updateAnnouncePort();
+}
+
+StunStatus SessionImpl::stunStatus() const
+{
+    return m_stunNatTraversal ? m_stunNatTraversal->status() : StunStatus();
+}
+
+void SessionImpl::checkStunNow()
+{
+    if (m_stunNatTraversal)
+        m_stunNatTraversal->checkNow();
+}
+
+void SessionImpl::configureStun()
+{
+    if (!m_stunNatTraversal)
+        return;
+
+    m_stunNatTraversal->configure(isStunEnabled(), m_stunListenPort, stunServers()
+        , std::chrono::seconds(stunCheckInterval()));
+}
+
+int SessionImpl::effectiveAnnouncePort() const
+{
+    // STUN mapped port takes precedence over manually configured announce port
+    if (isStunEnabled() && isStunAnnouncePortEnabled() && (m_stunExternalPort > 0))
+    {
+        // announce_port = 0 means "listening port", no need to override it
+        return (m_stunExternalPort != m_stunListenPort) ? m_stunExternalPort : 0;
+    }
+
+    return announcePort();
+}
+
+void SessionImpl::handleStunExternalPortChanged(const quint16 port)
+{
+    m_stunExternalPort = port;
+    updateAnnouncePort();
+}
+
+void SessionImpl::updateAnnouncePort()
+{
+#if LIBTORRENT_VERSION_NUM >= 20011
+    const int newAnnouncePort = effectiveAnnouncePort();
+    if (m_nativeSession->get_settings().get_int(lt::settings_pack::announce_port) == newAnnouncePort)
+        return;
+
+    if (newAnnouncePort > 0)
+    {
+        LogMsg(tr("Reporting port %1 to trackers and DHT instead of listening port %2")
+            .arg(QString::number(newAnnouncePort), QString::number(m_stunListenPort)), Log::INFO);
+    }
+    else
+    {
+        LogMsg(tr("Reporting listening port to trackers and DHT"), Log::INFO);
+    }
+
+    lt::settings_pack settingsPack;
+    settingsPack.set_int(lt::settings_pack::announce_port, newAnnouncePort);
+    m_nativeSession->apply_settings(std::move(settingsPack));
+    // Let trackers know the new port as soon as possible
+    reannounceToAllTrackers();
+#endif
+}
+
 int SessionImpl::maxConcurrentHTTPAnnounces() const
 {
     return m_maxConcurrentHTTPAnnounces;
@@ -6267,6 +6421,13 @@ void SessionImpl::handleListenSucceededAlert(const lt::listen_succeeded_alert *a
     const QString proto {toString(alert->socket_type)};
     LogMsg(tr("Successfully listening on IP. IP: \"%1\". Port: \"%2/%3\"")
             .arg(toString(alert->address), proto, QString::number(alert->port)), Log::INFO);
+
+    if ((alert->socket_type == lt::socket_type_t::tcp) && (alert->port > 0)
+        && (static_cast<quint16>(alert->port) != m_stunListenPort))
+    {
+        m_stunListenPort = static_cast<quint16>(alert->port);
+        configureStun();
+    }
 }
 
 void SessionImpl::handleListenFailedAlert(const lt::listen_failed_alert *alert)
@@ -6275,6 +6436,24 @@ void SessionImpl::handleListenFailedAlert(const lt::listen_failed_alert *alert)
     LogMsg(tr("Failed to listen on IP. IP: \"%1\". Port: \"%2/%3\". Reason: \"%4\"")
         .arg(toString(alert->address), proto, QString::number(alert->port)
             , Utils::String::fromLocal8Bit(alert->error.message())), Log::CRITICAL);
+
+    // The short-lived STUN UDP socket might have been bound to the port at
+    // the very moment libtorrent tried to (re)bind it. Retry once.
+#ifdef QBT_USES_LIBTORRENT2
+    const bool isUDPSocket = (alert->socket_type == lt::socket_type_t::utp);
+#else
+    const bool isUDPSocket = (alert->socket_type == lt::socket_type_t::udp);
+#endif
+    if (isStunEnabled() && isUDPSocket && (alert->error == boost::system::errc::address_in_use))
+    {
+        // Retry at most once per minute to avoid a loop if the port is really taken by someone else
+        static QElapsedTimer lastRetryTimer;
+        if (!lastRetryTimer.isValid() || lastRetryTimer.hasExpired(60'000))
+        {
+            lastRetryTimer.start();
+            QTimer::singleShot(3s, this, [this] { m_nativeSession->reopen_network_sockets(); });
+        }
+    }
 }
 
 void SessionImpl::handleExternalIPAlert(const lt::external_ip_alert *alert)

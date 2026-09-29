@@ -83,6 +83,7 @@ namespace BitTorrent
     class Torrent;
     class TorrentContentRemover;
     class TorrentDescriptor;
+    class StunNatTraversal;
     class TorrentImpl;
     class Tracker;
 
@@ -372,6 +373,16 @@ namespace BitTorrent
         void setAnnounceIP(const QString &ip) override;
         int announcePort() const override;
         void setAnnouncePort(int port) override;
+        bool isStunEnabled() const override;
+        void setStunEnabled(bool enabled) override;
+        QStringList stunServers() const override;
+        void setStunServers(const QStringList &servers) override;
+        int stunCheckInterval() const override;
+        void setStunCheckInterval(int seconds) override;
+        bool isStunAnnouncePortEnabled() const override;
+        void setStunAnnouncePortEnabled(bool enabled) override;
+        StunStatus stunStatus() const override;
+        void checkStunNow() override;
         int maxConcurrentHTTPAnnounces() const override;
         void setMaxConcurrentHTTPAnnounces(int value) override;
         bool isReannounceWhenAddressChangedEnabled() const override;
@@ -542,6 +553,11 @@ namespace BitTorrent
 
     private:
         struct ResumeSessionContext;
+
+        void configureStun();
+        void handleStunExternalPortChanged(quint16 port);
+        void updateAnnouncePort();
+        int effectiveAnnouncePort() const;
 
         struct MoveStorageJob
         {
@@ -714,6 +730,10 @@ namespace BitTorrent
         CachedSettingValue<bool> m_includeOverheadInLimits;
         CachedSettingValue<QString> m_announceIP;
         CachedSettingValue<int> m_announcePort;
+        CachedSettingValue<bool> m_isStunEnabled;
+        CachedSettingValue<QStringList> m_stunServers;
+        CachedSettingValue<int> m_stunCheckInterval;
+        CachedSettingValue<bool> m_isStunAnnouncePortEnabled;
         CachedSettingValue<int> m_maxConcurrentHTTPAnnounces;
         CachedSettingValue<bool> m_isReannounceWhenAddressChangedEnabled;
         CachedSettingValue<int> m_stopTrackerTimeout;
@@ -885,6 +905,10 @@ namespace BitTorrent
 
         QString m_lastExternalIPv4Address;
         QString m_lastExternalIPv6Address;
+
+        StunNatTraversal *m_stunNatTraversal = nullptr;
+        quint16 m_stunListenPort = 0;
+        quint16 m_stunExternalPort = 0;
 
         bool m_needUpgradeDownloadPath = false;
 
