@@ -2,14 +2,15 @@
 
 #include <QDateTime>
 #include <QNetworkDatagram>
+#include <QThreadPool>
 
 namespace BitTorrent
 {
     const QStringList STUNManager::DEFAULT_STUN_SERVERS = {
-        QStringLiteral("stun.chat.bilibili.com:3478"),
-        QStringLiteral("stun.hitv.com:3478"),
         QStringLiteral("stun.miwifi.com:3478"),
         QStringLiteral("stun.douyucdn.cn:18000"),
+        QStringLiteral("stun.chat.bilibili.com:3478"),
+        QStringLiteral("stun.hitv.com:3478"),
         QStringLiteral("stun.cloudflare.com:3478"),
         QStringLiteral("stun1.l.google.com:19302"),
         QStringLiteral("stun.syncthing.net:3478")
@@ -60,8 +61,6 @@ namespace BitTorrent
         , m_serverStrings(DEFAULT_STUN_SERVERS)
     {
         connect(&m_keepAliveTimer, &QTimer::timeout, this, &STUNManager::onKeepAliveTimeout);
-        connect(&m_diagnosticTimer, &QTimer::timeout, this, &STUNManager::onDiagnosticTimeout);
-        m_diagnosticTimer.setSingleShot(true);
 
         parseServerList();
     }
@@ -206,6 +205,8 @@ namespace BitTorrent
             return;
         }
 
+        m_enabled = true;
+
         // Initialize background socket on port 0 for ongoing WAN IP monitoring and keepalive probes
         m_socket = std::make_unique<QUdpSocket>(this);
         connect(m_socket.get(), &QUdpSocket::readyRead, this, &STUNManager::onSocketReadyRead);
@@ -301,21 +302,14 @@ namespace BitTorrent
 
     void STUNManager::stop()
     {
+        m_enabled = false;
         m_keepAliveTimer.stop();
-        m_diagnosticTimer.stop();
         m_hasPendingProbe = false;
-        m_diagStep = DiagnosticStep::None;
 
         if (m_socket)
         {
             m_socket->close();
             m_socket.reset();
-        }
-
-        if (m_diagSocket)
-        {
-            m_diagSocket->close();
-            m_diagSocket.reset();
         }
 
         setStatus(STUNStatus::Disabled);
@@ -489,189 +483,170 @@ namespace BitTorrent
             parseServerList();
 
         emit logMessage(QStringLiteral("STUN: 正在发起网络 NAT 类型深度诊断 (RFC 5780)..."));
-        m_diagStep = DiagnosticStep::Test1_Primary;
-        m_diagIsEIM = false;
 
-        if (m_diagSocket)
+        const QStringList servers = m_serverStrings;
+
+        QThreadPool::globalInstance()->start([this, servers]()
         {
-            m_diagSocket->close();
-            m_diagSocket.reset();
-        }
-
-        m_diagSocket = std::make_unique<QUdpSocket>(this);
-        connect(m_diagSocket.get(), &QUdpSocket::readyRead, this, &STUNManager::onDiagSocketReadyRead);
-
-        if (!m_diagSocket->bind(QHostAddress::AnyIPv4, 0))
-        {
-            finalizeDiagnostic(NATType::UdpBlocked, QStringLiteral("无法创建诊断套接字"));
-            return;
-        }
-
-        const ServerEndpoint &ep = m_servers[m_currentServerIndex];
-        if (ep.isResolved)
-        {
-            m_diagnosticTimer.start(3000);
-            sendDiagBindingRequest(ep.resolvedAddress, ep.port);
-        }
-        else
-        {
-            resolveNextServer();
-            m_diagnosticTimer.start(5000);
-        }
-    }
-
-    void STUNManager::sendDiagBindingRequest(const QHostAddress &addr, quint16 port, bool changeIP, bool changePort)
-    {
-        if (!m_diagSocket || !m_diagSocket->isOpen())
-            return;
-
-        const STUN::TransactionID transId = STUN::TransactionID::generate();
-        m_currentTransactionId = transId;
-
-        STUN::Message req(STUN::MessageClass::Request, STUN::Method::Binding, transId);
-        if (changeIP || changePort)
-            req.setChangeRequest(changeIP, changePort);
-
-        const QByteArray payload = req.serialize();
-        m_diagSocket->writeDatagram(payload, addr, port);
-    }
-
-    void STUNManager::onDiagSocketReadyRead()
-    {
-        while (m_diagSocket && m_diagSocket->hasPendingDatagrams())
-        {
-            QNetworkDatagram datagram = m_diagSocket->receiveDatagram();
-            const QByteArray data = datagram.data();
-            const QHostAddress sender = datagram.senderAddress();
-            const quint16 senderPort = static_cast<quint16>(datagram.senderPort());
-
-            STUN::Message resp;
-            if (!STUN::Message::parse(data, resp))
-                continue;
-
-            if (resp.isSuccessResponse())
+            QStringList candidateServers = servers;
+            for (const QString &preferred : {QStringLiteral("stun.miwifi.com:3478"), QStringLiteral("stun.douyucdn.cn:18000")})
             {
-                handleDiagStunResponse(resp, sender, senderPort);
-            }
-        }
-    }
-
-    void STUNManager::handleDiagStunResponse(const STUN::Message &msg, const QHostAddress &sender, quint16 senderPort)
-    {
-        Q_UNUSED(sender);
-        Q_UNUSED(senderPort);
-
-        if (!msg.hasMappedAddress())
-            return;
-
-        const QHostAddress newMappedAddr = msg.mappedAddress();
-        const quint16 newMappedPort = msg.mappedPort();
-
-        m_diagnosticTimer.stop();
-
-        if (m_diagStep == DiagnosticStep::Test1_Primary)
-        {
-            m_diagMappedIP1 = newMappedAddr;
-            m_diagMappedPort1 = newMappedPort;
-
-            if (msg.hasOtherAddress())
-            {
-                m_diagOtherIP = msg.otherAddress();
-                m_diagOtherPort = msg.otherPort();
+                candidateServers.removeAll(preferred);
+                candidateServers.prepend(preferred);
             }
 
-            // Proceed to Test 2: Mapping test with Other IP
-            if (!m_diagOtherIP.isNull())
-            {
-                m_diagStep = DiagnosticStep::Test2_MappingOtherIP;
-                m_diagnosticTimer.start(3000);
-                sendDiagBindingRequest(m_diagOtherIP, m_servers[m_currentServerIndex].port);
-            }
-            else
-            {
-                // If server doesn't provide OTHER-ADDRESS, infer NAT1 based on reachable mapping
-                finalizeDiagnostic(NATType::FullCone, QStringLiteral("STUN 服务器成功映射，网络表现为 Full Cone (全锥形)"));
-            }
-            return;
-        }
-        else if (m_diagStep == DiagnosticStep::Test2_MappingOtherIP)
-        {
-            m_diagMappedIP2 = newMappedAddr;
-            m_diagMappedPort2 = newMappedPort;
+            NATType detectedType = NATType::Unknown;
+            QString detectedDetails;
 
-            // Check Endpoint-Independent Mapping (EIM)
-            if (m_diagMappedIP1 == m_diagMappedIP2 && m_diagMappedPort1 == m_diagMappedPort2)
+            for (const QString &serverStr : candidateServers)
             {
-                m_diagIsEIM = true;
-                // Proceed to Test 3: Filtering test with CHANGE-REQUEST
-                m_diagStep = DiagnosticStep::Test3_FilteringChangeBoth;
-                m_diagnosticTimer.start(3000);
-                sendDiagBindingRequest(m_servers[m_currentServerIndex].resolvedAddress,
-                                       m_servers[m_currentServerIndex].port, true, true);
-            }
-            else
-            {
-                // Port changes for different destinations -> Symmetric NAT
-                finalizeDiagnostic(NATType::Symmetric,
-                                   QStringLiteral("不同外网目标映射的端口不一致 (Symmetric NAT)，无法支持外部直接连入"));
-            }
-            return;
-        }
-        else if (m_diagStep == DiagnosticStep::Test3_FilteringChangeBoth)
-        {
-            // Response received from alternate IP/Port -> Endpoint-Independent Filtering
-            finalizeDiagnostic(NATType::FullCone,
-                               QStringLiteral("全锥形 NAT (NAT1 / Full Cone)！支持外部任意 Peer 直接建立入站连接"));
-            return;
-        }
-        else if (m_diagStep == DiagnosticStep::Test4_FilteringChangePort)
-        {
-            // Response received with port change only -> Restricted Cone
-            finalizeDiagnostic(NATType::RestrictedCone,
-                               QStringLiteral("受限锥形 NAT (NAT2 / Restricted Cone)，外部 Peer 连入受限"));
-            return;
-        }
-    }
+                const QString trimmed = serverStr.trimmed();
+                if (trimmed.isEmpty())
+                    continue;
 
-    void STUNManager::onDiagnosticTimeout()
-    {
-        if (m_diagStep == DiagnosticStep::Test1_Primary)
-        {
-            finalizeDiagnostic(NATType::UdpBlocked, QStringLiteral("无法连接 STUN 服务器，UDP 可能被运营商或防火墙阻断"));
-        }
-        else if (m_diagStep == DiagnosticStep::Test2_MappingOtherIP)
-        {
-            // Test 2 timed out, assume Symmetric or Restricted
-            finalizeDiagnostic(NATType::PortRestrictedCone, QStringLiteral("第二组映射测试超时，网络表现为受限锥形 (NAT3)"));
-        }
-        else if (m_diagStep == DiagnosticStep::Test3_FilteringChangeBoth)
-        {
-            // Test 3 timed out -> Try Test 4 (change port only)
-            m_diagStep = DiagnosticStep::Test4_FilteringChangePort;
-            m_diagnosticTimer.start(3000);
-            sendDiagBindingRequest(m_servers[m_currentServerIndex].resolvedAddress,
-                                   m_servers[m_currentServerIndex].port, false, true);
-        }
-        else if (m_diagStep == DiagnosticStep::Test4_FilteringChangePort)
-        {
-            // Test 4 also timed out -> Port Restricted Cone (NAT3)
-            finalizeDiagnostic(NATType::PortRestrictedCone,
-                               QStringLiteral("端口受限锥形 NAT (NAT3 / Port Restricted)，仅可连向已知端口"));
-        }
+                QString host = trimmed;
+                quint16 port = 3478;
+                const int colonIdx = trimmed.lastIndexOf(u':');
+                if (colonIdx != -1)
+                {
+                    host = trimmed.left(colonIdx).trimmed();
+                    bool ok = false;
+                    const int p = trimmed.mid(colonIdx + 1).toInt(&ok);
+                    if (ok && p > 0 && p <= 65535)
+                        port = static_cast<quint16>(p);
+                }
+
+                QHostAddress targetAddr(host);
+                if (targetAddr.isNull())
+                {
+                    const QHostInfo hostInfo = QHostInfo::fromName(host);
+                    if (hostInfo.error() != QHostInfo::NoError || hostInfo.addresses().isEmpty())
+                        continue;
+
+                    for (const QHostAddress &addr : hostInfo.addresses())
+                    {
+                        if (addr.protocol() == QAbstractSocket::IPv4Protocol)
+                        {
+                            targetAddr = addr;
+                            break;
+                        }
+                    }
+                    if (targetAddr.isNull())
+                        targetAddr = hostInfo.addresses().first();
+                }
+
+                QUdpSocket diagSocket;
+                if (!diagSocket.bind(QHostAddress::AnyIPv4, 0))
+                    continue;
+
+                // Step 1: Test 1 - Primary Binding Request
+                const STUN::TransactionID tid1 = STUN::TransactionID::generate();
+                const STUN::Message req1(STUN::MessageClass::Request, STUN::Method::Binding, tid1);
+                diagSocket.writeDatagram(req1.serialize(), targetAddr, port);
+
+                if (!diagSocket.waitForReadyRead(1500))
+                    continue;
+
+                QNetworkDatagram datagram1 = diagSocket.receiveDatagram();
+                STUN::Message resp1;
+                if (!STUN::Message::parse(datagram1.data(), resp1) || !resp1.isSuccessResponse() || !resp1.hasMappedAddress())
+                    continue;
+
+                const QHostAddress mappedAddr1 = resp1.mappedAddress();
+                const quint16 mappedPort1 = resp1.mappedPort();
+
+                // If server provided OTHER-ADDRESS (RFC 5780 / RFC 3489 full capability)
+                if (resp1.hasOtherAddress() && !resp1.otherAddress().isNull())
+                {
+                    const QHostAddress otherIP = resp1.otherAddress();
+                    const quint16 otherPort = (resp1.otherPort() > 0) ? resp1.otherPort() : port;
+
+                    // Step 2: Test 2 - Send to Other IP/Port to test Mapping (EIM vs Symmetric)
+                    const STUN::TransactionID tid2 = STUN::TransactionID::generate();
+                    const STUN::Message req2(STUN::MessageClass::Request, STUN::Method::Binding, tid2);
+                    diagSocket.writeDatagram(req2.serialize(), otherIP, otherPort);
+
+                    if (diagSocket.waitForReadyRead(1500))
+                    {
+                        QNetworkDatagram datagram2 = diagSocket.receiveDatagram();
+                        STUN::Message resp2;
+                        if (STUN::Message::parse(datagram2.data(), resp2) && resp2.hasMappedAddress())
+                        {
+                            if (resp2.mappedPort() != mappedPort1 || resp2.mappedAddress() != mappedAddr1)
+                            {
+                                detectedType = NATType::Symmetric;
+                                detectedDetails = QStringLiteral("不同外网目标映射的端口不一致 (Symmetric NAT)，无法支持外部直接连入");
+                                break;
+                            }
+                        }
+                    }
+
+                    // Step 3: Test 3 - Send to Primary with CHANGE-REQUEST (change IP + change Port)
+                    const STUN::TransactionID tid3 = STUN::TransactionID::generate();
+                    STUN::Message req3(STUN::MessageClass::Request, STUN::Method::Binding, tid3);
+                    req3.setChangeRequest(true, true);
+                    diagSocket.writeDatagram(req3.serialize(), targetAddr, port);
+
+                    if (diagSocket.waitForReadyRead(1500))
+                    {
+                        QNetworkDatagram datagram3 = diagSocket.receiveDatagram();
+                        STUN::Message resp3;
+                        if (STUN::Message::parse(datagram3.data(), resp3) && resp3.isSuccessResponse())
+                        {
+                            detectedType = NATType::FullCone;
+                            detectedDetails = QStringLiteral("全锥形 NAT (NAT1 / Full Cone)！支持外部任意 Peer 直接建立入站连接");
+                            break;
+                        }
+                    }
+
+                    // Step 4: Test 4 - Send to Primary with CHANGE-REQUEST (change Port only)
+                    const STUN::TransactionID tid4 = STUN::TransactionID::generate();
+                    STUN::Message req4(STUN::MessageClass::Request, STUN::Method::Binding, tid4);
+                    req4.setChangeRequest(false, true);
+                    diagSocket.writeDatagram(req4.serialize(), targetAddr, port);
+
+                    if (diagSocket.waitForReadyRead(1500))
+                    {
+                        QNetworkDatagram datagram4 = diagSocket.receiveDatagram();
+                        STUN::Message resp4;
+                        if (STUN::Message::parse(datagram4.data(), resp4) && resp4.isSuccessResponse())
+                        {
+                            detectedType = NATType::RestrictedCone;
+                            detectedDetails = QStringLiteral("受限锥形 NAT (NAT2 / Restricted Cone)，外部 Peer 连入受限");
+                            break;
+                        }
+                    }
+
+                    // Neither change-request received -> Port Restricted Cone
+                    detectedType = NATType::PortRestrictedCone;
+                    detectedDetails = QStringLiteral("端口受限锥形 NAT (NAT3 / Port Restricted Cone)，仅可连向已知端口");
+                    break;
+                }
+                else
+                {
+                    // Basic STUN server without OTHER-ADDRESS
+                    detectedType = NATType::FullCone;
+                    detectedDetails = QStringLiteral("STUN 服务器成功映射，网络表现为 Full Cone (全锥形)");
+                    break;
+                }
+            }
+
+            if (detectedType == NATType::Unknown)
+            {
+                detectedType = NATType::UdpBlocked;
+                detectedDetails = QStringLiteral("无法连接 STUN 服务器，UDP 可能被运营商或防火墙阻断");
+            }
+
+            QMetaObject::invokeMethod(this, [this, detectedType, detectedDetails]()
+            {
+                finalizeDiagnostic(detectedType, detectedDetails);
+            }, Qt::QueuedConnection);
+        });
     }
 
     void STUNManager::finalizeDiagnostic(NATType type, const QString &details)
     {
-        m_diagStep = DiagnosticStep::None;
-        m_diagnosticTimer.stop();
         m_natType = type;
-
-        if (m_diagSocket)
-        {
-            m_diagSocket->close();
-            m_diagSocket.reset();
-        }
-
         emit logMessage(QStringLiteral("STUN: NAT 诊断完成 -> %1: %2").arg(natTypeToString(type), details));
         emit natTypeDetected(type, details);
     }

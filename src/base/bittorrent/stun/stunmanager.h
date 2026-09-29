@@ -80,21 +80,10 @@ namespace BitTorrent
 
     private slots:
         void onSocketReadyRead();
-        void onDiagSocketReadyRead();
         void onKeepAliveTimeout();
         void onDnsResolved(const QHostInfo &hostInfo);
-        void onDiagnosticTimeout();
 
     private:
-        enum class DiagnosticStep
-        {
-            None,
-            Test1_Primary,
-            Test2_MappingOtherIP,
-            Test3_FilteringChangeBoth,
-            Test4_FilteringChangePort
-        };
-
         struct ServerEndpoint
         {
             QString host;
@@ -106,9 +95,7 @@ namespace BitTorrent
         void parseServerList();
         void resolveNextServer();
         void sendBindingRequest(const QHostAddress &addr, quint16 port, bool changeIP = false, bool changePort = false);
-        void sendDiagBindingRequest(const QHostAddress &addr, quint16 port, bool changeIP = false, bool changePort = false);
         void handleStunResponse(const STUN::Message &msg, const QHostAddress &sender, quint16 senderPort);
-        void handleDiagStunResponse(const STUN::Message &msg, const QHostAddress &sender, quint16 senderPort);
         void switchNextServer();
         void setStatus(STUNStatus newStatus);
         void finalizeDiagnostic(NATType type, const QString &details);
@@ -127,24 +114,12 @@ namespace BitTorrent
         quint16 m_mappedPort {0};
 
         std::unique_ptr<QUdpSocket> m_socket;
-        std::unique_ptr<QUdpSocket> m_diagSocket;
         QTimer m_keepAliveTimer;
-        QTimer m_diagnosticTimer;
 
         // Pending transaction tracking
         STUN::TransactionID m_currentTransactionId {};
         bool m_hasPendingProbe {false};
         int m_probeFailures {0};
-
-        // NAT Diagnostic state
-        DiagnosticStep m_diagStep {DiagnosticStep::None};
-        QHostAddress m_diagMappedIP1;
-        quint16 m_diagMappedPort1 {0};
-        QHostAddress m_diagOtherIP;
-        quint16 m_diagOtherPort {0};
-        QHostAddress m_diagMappedIP2;
-        quint16 m_diagMappedPort2 {0};
-        bool m_diagIsEIM {false};
     };
 
     QString natTypeToString(NATType type);
