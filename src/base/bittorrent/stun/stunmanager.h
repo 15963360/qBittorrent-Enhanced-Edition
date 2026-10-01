@@ -1,10 +1,15 @@
 #pragma once
 
-#include <chrono>
+#include <atomic>
+#include <memory>
+
+#include <QByteArray>
 #include <QHostAddress>
 #include <QHostInfo>
 #include <QObject>
 #include <QStringList>
+#include <QTcpSocket>
+#include <QThreadPool>
 #include <QTimer>
 #include <QUdpSocket>
 
@@ -40,6 +45,12 @@ namespace BitTorrent
     public:
         static const QStringList DEFAULT_STUN_SERVERS;
         static constexpr int DEFAULT_KEEPALIVE_INTERVAL_SEC = 25;
+        static constexpr int MIN_KEEPALIVE_INTERVAL_SEC = 10;
+        static constexpr int MAX_KEEPALIVE_INTERVAL_SEC = 300;
+        static constexpr int UDP_PROBE_TIMEOUT_MS = 900;
+        static constexpr int TCP_PROBE_TIMEOUT_MS = 4000;
+        static constexpr int MAX_PROBE_FAILURES = 3;
+        static constexpr int NAT_TEST_TIMEOUT_MS = 1500;
 
         explicit STUNManager(QObject *parent = nullptr);
         ~STUNManager() override;
@@ -56,20 +67,40 @@ namespace BitTorrent
         int keepAliveInterval() const;
         void setKeepAliveInterval(int seconds);
 
+        // Carrier-grade NAT allocates the UDP and the TCP binding independently, so a
+        // STUN binding only refreshes the transport it was sent over. Each transport
+        // therefore has its own keepalive channel and its own switch.
+        bool isUdpKeepAliveEnabled() const;
+        void setUdpKeepAliveEnabled(bool enabled);
+        bool isTcpKeepAliveEnabled() const;
+        void setTcpKeepAliveEnabled(bool enabled);
+
         STUNStatus status() const;
         NATType natType() const;
 
+        // Endpoint announced to trackers and peers. The UDP mapping is preferred
+        // because uTP is the transport that survives carrier-grade NAT.
         QHostAddress mappedAddress() const;
         quint16 mappedPort() const;
+
+        QHostAddress udpMappedAddress() const;
+        quint16 udpMappedPort() const;
+        QHostAddress tcpMappedAddress() const;
+        quint16 tcpMappedPort() const;
+        bool hasUdpMapping() const;
+        bool hasTcpMapping() const;
 
         void start();
         void stop();
         void restart();
 
-        // Trigger manual/diagnostic NAT type test (runs on dedicated ephemeral port, no collision)
+        // RFC 5780 mapping/filtering probe. Self-contained: it never touches the
+        // keepalive sockets and never drives the announced endpoint.
         void runNATTypeTest();
+        bool isNATTestRunning() const;
 
-        // Discover mapped port on localPort synchronously before libtorrent starts or re-binds
+        // Blocking probe on the listening port, used before libtorrent binds its
+        // listeners so the very first announce carries the mapped port.
         bool discoverMappedPortSync(int timeoutMs = 1500);
 
     signals:
@@ -79,11 +110,18 @@ namespace BitTorrent
         void logMessage(const QString &msg, bool isWarning = false);
 
     private slots:
-        void onSocketReadyRead();
         void onKeepAliveTimeout();
         void onDnsResolved(const QHostInfo &hostInfo);
+        void onUdpProbeReadyRead();
+        void onUdpProbeTimeout();
+        void onTcpConnected();
+        void onTcpReadyRead();
+        void onTcpSocketError();
+        void onTcpProbeTimeout();
 
     private:
+        enum class Transport { Udp, Tcp };
+
         struct ServerEndpoint
         {
             QString host;
@@ -92,13 +130,41 @@ namespace BitTorrent
             bool isResolved {false};
         };
 
+        struct PendingProbe
+        {
+            bool active {false};
+            STUN::TransactionID id {};
+            QHostAddress responderAddress;
+            quint16 responderPort {0};
+        };
+
         void parseServerList();
-        void resolveNextServer();
-        void sendBindingRequest(const QHostAddress &addr, quint16 port, bool changeIP = false, bool changePort = false);
-        void handleStunResponse(const STUN::Message &msg, const QHostAddress &sender, quint16 senderPort);
-        void switchNextServer();
+        bool resolveEndpointSync(ServerEndpoint &endpoint);
+        ServerEndpoint *currentServer();
+        void ensureResolved(Transport transport);
+        void startProbe(Transport transport);
+        void advanceServer(Transport transport);
+        void scheduleServerAdvance(Transport transport);
+        void refreshStatus();
         void setStatus(STUNStatus newStatus);
-        void finalizeDiagnostic(NATType type, const QString &details);
+        void updateAnnouncedEndpoint();
+
+        void startUdpProbe();
+        void closeUdpProbe();
+        void finishUdpProbe(bool success, const QHostAddress &ip = QHostAddress(), quint16 port = 0);
+
+        void startTcpProbe();
+        void closeTcpProbe();
+        void sendTcpBindingRequest();
+
+        void abortProbes();
+        void stopInternal(bool disabledByUser);
+
+        bool bindToLocalPort(QAbstractSocket &socket) const;
+        void reportProbeSuccess(Transport transport, const QHostAddress &ip, quint16 port);
+        void reportProbeFailure(Transport transport, const QString &reason);
+        bool isTransportEnabled(Transport transport) const;
+        QString transportName(Transport transport) const;
 
         bool m_enabled {false};
         quint16 m_localPort {0};
@@ -107,19 +173,47 @@ namespace BitTorrent
         int m_currentServerIndex {0};
         int m_keepAliveIntervalSec {DEFAULT_KEEPALIVE_INTERVAL_SEC};
 
+        bool m_udpKeepAliveEnabled {true};
+        bool m_tcpKeepAliveEnabled {false};
+
         STUNStatus m_status {STUNStatus::Disabled};
         NATType m_natType {NATType::Unknown};
 
-        QHostAddress m_mappedAddress;
+        QHostAddress m_udpMappedAddress;
+        quint16 m_udpMappedPort {0};
+        QHostAddress m_tcpMappedAddress;
+        quint16 m_tcpMappedPort {0};
+
+        QHostAddress m_mappedAddress;  // announced endpoint
         quint16 m_mappedPort {0};
 
-        std::unique_ptr<QUdpSocket> m_socket;
-        QTimer m_keepAliveTimer;
+        // UDP channel: one short-lived socket per probe, bound to the listening port
+        // so the carrier mapping being refreshed is the one peers actually use.
+        std::unique_ptr<QUdpSocket> m_udpProbe;
+        PendingProbe m_udpPending;
+        QTimer m_udpProbeTimer;
+        int m_udpFailures {0};
 
-        // Pending transaction tracking
-        STUN::TransactionID m_currentTransactionId {};
-        bool m_hasPendingProbe {false};
-        int m_probeFailures {0};
+        // TCP channel: one connection is kept open, because a carrier-grade NAT only
+        // keeps the TCP binding while something is flowing from the listening port.
+        std::unique_ptr<QTcpSocket> m_tcpSocket;
+        QByteArray m_tcpBuffer;
+        PendingProbe m_tcpPending;
+        QTimer m_tcpProbeTimer;
+        QHostAddress m_tcpServerAddress;
+        quint16 m_tcpServerPort {0};
+        int m_tcpFailures {0};
+        bool m_tcpServerAnswered {false};
+        bool m_tcpUnsupportedWarned {false};
+
+        QTimer m_keepAliveTimer;
+        bool m_advanceScheduled {false};
+
+        // RFC 5780 diagnostics run on a private pool so they cannot occupy the global
+        // pool, and their lifetime is bounded by this object.
+        QThreadPool m_natTestPool;
+        std::shared_ptr<std::atomic_bool> m_natTestCancel;
+        bool m_natTestRunning {false};
     };
 
     QString natTypeToString(NATType type);

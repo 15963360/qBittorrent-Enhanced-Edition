@@ -425,7 +425,15 @@ namespace BitTorrent
         virtual void setStunServers(const QStringList &servers) = 0;
         virtual int stunKeepAliveInterval() const = 0;
         virtual void setStunKeepAliveInterval(int seconds) = 0;
+        // CGNAT allocates the UDP and the TCP binding independently, so each transport
+        // has its own keepalive switch and its own mapped port.
+        virtual bool isSTUNUdpKeepAliveEnabled() const = 0;
+        virtual void setSTUNUdpKeepAliveEnabled(bool enabled) = 0;
+        virtual bool isSTUNTcpKeepAliveEnabled() const = 0;
+        virtual void setSTUNTcpKeepAliveEnabled(bool enabled) = 0;
         virtual quint16 stunMappedPort() const = 0;
+        virtual quint16 stunUdpMappedPort() const = 0;
+        virtual quint16 stunTcpMappedPort() const = 0;
         virtual QHostAddress stunMappedAddress() const = 0;
         virtual STUNStatus stunStatus() const = 0;
         virtual NATType stunNATType() const = 0;

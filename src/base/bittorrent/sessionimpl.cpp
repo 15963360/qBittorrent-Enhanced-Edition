@@ -501,6 +501,8 @@ SessionImpl::SessionImpl(QObject *parent)
     , m_isSTUNEnabled(BITTORRENT_SESSION_KEY(u"STUNEnabled"_s), false)
     , m_stunServers(BITTORRENT_SESSION_KEY(u"STUNServers"_s), STUNManager::DEFAULT_STUN_SERVERS.join(u';'))
     , m_stunKeepAliveInterval(BITTORRENT_SESSION_KEY(u"STUNKeepAliveInterval"_s), STUNManager::DEFAULT_KEEPALIVE_INTERVAL_SEC)
+    , m_stunUdpKeepAliveEnabled(BITTORRENT_SESSION_KEY(u"STUNKeepAliveUDP"_s), true)
+    , m_stunTcpKeepAliveEnabled(BITTORRENT_SESSION_KEY(u"STUNKeepAliveTCP"_s), false)
     , m_maxConcurrentHTTPAnnounces(BITTORRENT_SESSION_KEY(u"MaxConcurrentHTTPAnnounces"_s), 50)
     , m_isReannounceWhenAddressChangedEnabled(BITTORRENT_SESSION_KEY(u"ReannounceWhenAddressChanged"_s), false)
     , m_stopTrackerTimeout(BITTORRENT_SESSION_KEY(u"StopTrackerTimeout"_s), 2)
@@ -638,6 +640,8 @@ SessionImpl::SessionImpl(QObject *parent)
     m_stunManager->setLocalPort(static_cast<quint16>(port()));
     m_stunManager->setStunServers(m_stunServers.get().split(u';', Qt::SkipEmptyParts));
     m_stunManager->setKeepAliveInterval(m_stunKeepAliveInterval);
+    m_stunManager->setUdpKeepAliveEnabled(m_stunUdpKeepAliveEnabled);
+    m_stunManager->setTcpKeepAliveEnabled(m_stunTcpKeepAliveEnabled);
 
     connect(m_stunManager.get(), &STUNManager::mappedEndpointChanged,
             this, &SessionImpl::onSTUNMappedEndpointChanged);
@@ -5130,9 +5134,49 @@ void SessionImpl::setStunKeepAliveInterval(const int seconds)
     }
 }
 
+bool SessionImpl::isSTUNUdpKeepAliveEnabled() const
+{
+    return m_stunUdpKeepAliveEnabled;
+}
+
+void SessionImpl::setSTUNUdpKeepAliveEnabled(const bool enabled)
+{
+    if (enabled != m_stunUdpKeepAliveEnabled)
+    {
+        m_stunUdpKeepAliveEnabled = enabled;
+        if (m_stunManager)
+            m_stunManager->setUdpKeepAliveEnabled(enabled);
+    }
+}
+
+bool SessionImpl::isSTUNTcpKeepAliveEnabled() const
+{
+    return m_stunTcpKeepAliveEnabled;
+}
+
+void SessionImpl::setSTUNTcpKeepAliveEnabled(const bool enabled)
+{
+    if (enabled != m_stunTcpKeepAliveEnabled)
+    {
+        m_stunTcpKeepAliveEnabled = enabled;
+        if (m_stunManager)
+            m_stunManager->setTcpKeepAliveEnabled(enabled);
+    }
+}
+
 quint16 SessionImpl::stunMappedPort() const
 {
     return m_stunExternalPort;
+}
+
+quint16 SessionImpl::stunUdpMappedPort() const
+{
+    return m_stunManager ? m_stunManager->udpMappedPort() : 0;
+}
+
+quint16 SessionImpl::stunTcpMappedPort() const
+{
+    return m_stunManager ? m_stunManager->tcpMappedPort() : 0;
 }
 
 QHostAddress SessionImpl::stunMappedAddress() const
@@ -5158,18 +5202,71 @@ void SessionImpl::runSTUNNATTypeTest()
 
 void SessionImpl::onSTUNMappedEndpointChanged(const QHostAddress &ip, quint16 port)
 {
+    // Port 0 carries "no mapping anymore": stop announcing a port that is no longer
+    // forwarded, otherwise peers keep dialling into a dead endpoint.
+    if ((port == 0) || ip.isNull())
+    {
+        if (m_stunExternalPort == 0)
+            return;
+
+        m_stunExternalPort = 0;
+        m_stunExternalAddress.clear();
+        emit stunMappedEndpointChanged(QHostAddress(), 0);
+
+        LogMsg(QStringLiteral("[STUN 穿透] 公网映射已失效，回退为本地监听端口 %1")
+                   .arg(QString::number(this->port())), Log::INFO);
+
+        configureListeningInterface();
+        configureDeferred();
+        return;
+    }
+
     m_stunExternalAddress = ip;
     const bool portChanged = (m_stunExternalPort != port);
     m_stunExternalPort = port;
 
     emit stunMappedEndpointChanged(ip, port);
 
-    LogMsg(QStringLiteral("[STUN 穿透成功] 已打通运营商大内网:\n"
+    const quint16 udpPort = m_stunManager ? m_stunManager->udpMappedPort() : 0;
+    const quint16 tcpPort = m_stunManager ? m_stunManager->tcpMappedPort() : 0;
+
+    QString mappingDetail = QStringLiteral("  ├─ UDP 映射: ");
+    if (udpPort > 0)
+    {
+        mappingDetail += QStringLiteral("%1:%2\n").arg(ip.toString()).arg(udpPort);
+    }
+    else
+    {
+        mappingDetail += m_stunUdpKeepAliveEnabled
+                             ? QStringLiteral("尚未建立\n")
+                             : QStringLiteral("未启用（uTP 入站无法穿透）\n");
+    }
+
+    mappingDetail += QStringLiteral("  ├─ TCP 映射: ");
+    if (tcpPort > 0)
+    {
+        mappingDetail += QStringLiteral("%1:%2\n").arg(ip.toString()).arg(tcpPort);
+    }
+    else
+    {
+        mappingDetail += m_stunTcpKeepAliveEnabled
+                             ? QStringLiteral("尚未建立\n")
+                             : QStringLiteral("未启用（TCP 入站无法穿透）\n");
+    }
+
+    if (m_stunUdpKeepAliveEnabled && m_stunTcpKeepAliveEnabled && (udpPort > 0) && (tcpPort > 0)
+        && (udpPort != tcpPort))
+    {
+        mappingDetail += QStringLiteral("  ⚠ 运营商为 TCP 与 UDP 分配了不同端口，"
+                                        "通告端口 %1 只能服务其中一种协议。\n").arg(port);
+    }
+
+    LogMsg(QStringLiteral("[STUN 穿透] 运营商大内网映射已更新:\n"
                           "  ├─ 本地监听端口: %1\n"
-                          "  ├─ 公网 IPv4 映射端点: %2:%3\n"
-                          "  ├─ Tracker 汇报端口: %3 (外部 Peer 通过此端口直连)\n"
-                          "  └─ IPv6 兼容保障: 已扩展监听 [::]:%3 (确保 IPv4/IPv6 双栈 Peer 均可成功连入)")
-           .arg(QString::number(this->port()), ip.toString(), QString::number(port)), Log::INFO);
+                          "  ├─ 通告端口: %2 (Tracker 汇报，供外部 Peer 连入)\n"
+                          "%3"
+                          "  └─ IPv6 侧无需穿透，已按通告端口扩展监听")
+           .arg(QString::number(this->port()), QString::number(port), mappingDetail), Log::INFO);
 
     if (portChanged)
     {

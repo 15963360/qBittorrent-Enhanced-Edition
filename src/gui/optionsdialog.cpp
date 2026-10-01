@@ -849,6 +849,8 @@ void OptionsDialog::loadConnectionTabOptions()
     m_ui->checkSTUN->setChecked(session->isSTUNEnabled());
     m_ui->textSTUNServers->setText(session->stunServers().join(u';'));
     m_ui->spinSTUNKeepAlive->setValue(session->stunKeepAliveInterval());
+    m_ui->checkSTUNKeepAliveUDP->setChecked(session->isSTUNUdpKeepAliveEnabled());
+    m_ui->checkSTUNKeepAliveTCP->setChecked(session->isSTUNTcpKeepAliveEnabled());
     m_ui->lblNATTestResult->setText(BitTorrent::natTypeToString(session->stunNATType()));
     updateSTUNStatusDisplay();
 
@@ -959,6 +961,8 @@ void OptionsDialog::loadConnectionTabOptions()
     connect(m_ui->checkSTUN, &QAbstractButton::toggled, this, &ThisType::enableApplyButton);
     connect(m_ui->textSTUNServers, &QLineEdit::textChanged, this, &ThisType::enableApplyButton);
     connect(m_ui->spinSTUNKeepAlive, qSpinBoxValueChanged, this, &ThisType::enableApplyButton);
+    connect(m_ui->checkSTUNKeepAliveUDP, &QAbstractButton::toggled, this, &ThisType::enableApplyButton);
+    connect(m_ui->checkSTUNKeepAliveTCP, &QAbstractButton::toggled, this, &ThisType::enableApplyButton);
 
     connect(m_ui->btnTestNATType, &QAbstractButton::clicked, this, [this]()
     {
@@ -1032,6 +1036,8 @@ void OptionsDialog::saveConnectionTabOptions() const
     session->setSTUNEnabled(m_ui->checkSTUN->isChecked());
     session->setStunServers(m_ui->textSTUNServers->text().split(u';', Qt::SkipEmptyParts));
     session->setStunKeepAliveInterval(m_ui->spinSTUNKeepAlive->value());
+    session->setSTUNUdpKeepAliveEnabled(m_ui->checkSTUNKeepAliveUDP->isChecked());
+    session->setSTUNTcpKeepAliveEnabled(m_ui->checkSTUNKeepAliveTCP->isChecked());
 
     session->setMaxConnections(getMaxConnections());
     session->setMaxConnectionsPerTorrent(getMaxConnectionsPerTorrent());
@@ -1079,18 +1085,23 @@ void OptionsDialog::updateSTUNStatusDisplay()
         m_ui->lblSTUNStatusValue->setText(tr("Disabled"));
         m_ui->lblSTUNEndpointValue->setText(tr("N/A"));
         m_ui->lblSTUNDualStackValue->setText(tr("N/A"));
+        m_ui->lblSTUNTransportsValue->setText(tr("N/A"));
         return;
     }
 
     const BitTorrent::STUNStatus status = session->stunStatus();
     const QHostAddress mappedAddr = session->stunMappedAddress();
     const quint16 mappedPort = session->stunMappedPort();
+    const quint16 udpMappedPort = session->stunUdpMappedPort();
+    const quint16 tcpMappedPort = session->stunTcpMappedPort();
     const int localPort = session->port();
 
     switch (status)
     {
     case BitTorrent::STUNStatus::Mapped:
-        m_ui->lblSTUNStatusValue->setText(tr("Mapped successfully (NAT1 Full Cone)"));
+        // Reaching this state only means the mapping was confirmed; the NAT type is
+        // reported separately by the diagnostic and is never assumed here.
+        m_ui->lblSTUNStatusValue->setText(tr("Mapped (at least one transport reachable)"));
         break;
     case BitTorrent::STUNStatus::Probing:
         m_ui->lblSTUNStatusValue->setText(tr("Probing mapping..."));
@@ -1110,22 +1121,33 @@ void OptionsDialog::updateSTUNStatusDisplay()
     {
         m_ui->lblSTUNEndpointValue->setText(QStringLiteral("%1:%2 (%3: %4)")
             .arg(mappedAddr.toString()).arg(mappedPort).arg(tr("local port")).arg(localPort));
-
-        if (mappedPort != localPort)
-        {
-            m_ui->lblSTUNDualStackValue->setText(QStringLiteral("IPv4: %1 (%2: %3) | IPv6: [::]:%3 (%4)")
-                .arg(localPort).arg(tr("NAT1 mapped")).arg(mappedPort).arg(tr("active for dual-stack peers")));
-        }
-        else
-        {
-            m_ui->lblSTUNDualStackValue->setText(QStringLiteral("IPv4: %1 | IPv6: [::]:%1").arg(localPort));
-        }
     }
     else
     {
         m_ui->lblSTUNEndpointValue->setText(tr("Probing in progress..."));
-        m_ui->lblSTUNDualStackValue->setText(QStringLiteral("IPv4: %1 | IPv6: [::]:%1").arg(localPort));
     }
+
+    // The listening port is only extended to the announced port; this reports what is
+    // actually configured rather than claiming a wildcard socket exists.
+    const int announcedPort = (mappedPort > 0) ? mappedPort : localPort;
+    m_ui->lblSTUNDualStackValue->setText(QStringLiteral("IPv4: %1 | IPv6: %2")
+        .arg(QString::number(localPort), QString::number(announcedPort)));
+
+    const QString udpText = session->isSTUNUdpKeepAliveEnabled()
+        ? ((udpMappedPort > 0) ? tr("UDP: %1").arg(QString::number(udpMappedPort)) : tr("UDP: pending"))
+        : tr("UDP: disabled");
+    const QString tcpText = session->isSTUNTcpKeepAliveEnabled()
+        ? ((tcpMappedPort > 0) ? tr("TCP: %1").arg(QString::number(tcpMappedPort)) : tr("TCP: pending"))
+        : tr("TCP: disabled");
+
+    QString transports = udpText + QStringLiteral("  |  ") + tcpText;
+    if ((udpMappedPort > 0) && (tcpMappedPort > 0) && (udpMappedPort != tcpMappedPort))
+    {
+        transports += QStringLiteral("\n")
+            + tr("The carrier assigned different ports to TCP and UDP, so the announced port can only serve one of them.");
+    }
+
+    m_ui->lblSTUNTransportsValue->setText(transports);
 }
 
 void OptionsDialog::loadSpeedTabOptions()

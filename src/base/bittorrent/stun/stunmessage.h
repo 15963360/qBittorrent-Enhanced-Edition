@@ -97,7 +97,7 @@ namespace BitTorrent
             QHostAddress m_otherAddress;
             quint16 m_otherPort {0};
 
-            static void parseAddressAttribute(const quint8 *val, quint16 len, bool xorMapped,
+            static bool parseAddressAttribute(const quint8 *val, quint16 len, bool xorMapped,
                                              const TransactionID &transId, QHostAddress &addr, quint16 &port);
         };
     }

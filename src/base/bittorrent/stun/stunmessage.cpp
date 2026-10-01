@@ -180,11 +180,11 @@ namespace BitTorrent
             return packet;
         }
 
-        void Message::parseAddressAttribute(const quint8 *val, quint16 len, bool xorMapped,
+        bool Message::parseAddressAttribute(const quint8 *val, quint16 len, bool xorMapped,
                                            const TransactionID &transId, QHostAddress &addr, quint16 &port)
         {
             if (len < 4)
-                return;
+                return false;
 
             const quint8 family = val[1];
             quint16 rawPort = qFromBigEndian<quint16>(val + 2);
@@ -192,7 +192,7 @@ namespace BitTorrent
             if (family == 0x01) // IPv4
             {
                 if (len < 8)
-                    return;
+                    return false;
 
                 quint32 rawIp = qFromBigEndian<quint32>(val + 4);
 
@@ -206,11 +206,14 @@ namespace BitTorrent
                     port = rawPort;
                     addr = QHostAddress(rawIp);
                 }
+
+                return true;
             }
-            else if (family == 0x02) // IPv6
+
+            if (family == 0x02) // IPv6
             {
                 if (len < 20)
-                    return;
+                    return false;
 
                 if (xorMapped)
                 {
@@ -232,7 +235,11 @@ namespace BitTorrent
                     port = rawPort;
                     addr = QHostAddress(val + 4);
                 }
+
+                return true;
             }
+
+            return false;  // unsupported address family
         }
 
         bool Message::parse(const QByteArray &data, Message &outMessage)
@@ -250,11 +257,20 @@ namespace BitTorrent
             if ((rawType & 0xC000) != 0)
                 return false;
 
-            // RFC 5389 requires Magic Cookie to match
+            // RFC 5389 requires Magic Cookie to match; RFC 3489 peers are still
+            // tolerated, they simply never carry XOR-MAPPED-ADDRESS.
             const bool isRfc5389 = (magicCookie == MAGIC_COOKIE);
 
             outMessage.setMessageType(rawType);
             memcpy(outMessage.m_transactionID.data, ptr + 8, 12);
+
+            // parse() fills a caller-supplied object, so start from a clean slate.
+            outMessage.m_hasMappedAddress = false;
+            outMessage.m_mappedAddress.clear();
+            outMessage.m_mappedPort = 0;
+            outMessage.m_hasOtherAddress = false;
+            outMessage.m_otherAddress.clear();
+            outMessage.m_otherPort = 0;
 
             if (data.size() < HEADER_SIZE + msgLength)
                 return false;
@@ -276,26 +292,33 @@ namespace BitTorrent
                 switch (static_cast<AttributeType>(attrType))
                 {
                 case AttributeType::XorMappedAddress:
-                    parseAddressAttribute(attrVal, attrLen, true, outMessage.m_transactionID,
-                                          outMessage.m_mappedAddress, outMessage.m_mappedPort);
-                    outMessage.m_hasMappedAddress = true;
+                    // Only meaningful once the magic cookie confirmed this is RFC 5389;
+                    // decoding it as XOR otherwise would yield a garbage address.
+                    if (isRfc5389
+                        && parseAddressAttribute(attrVal, attrLen, true, outMessage.m_transactionID,
+                                                 outMessage.m_mappedAddress, outMessage.m_mappedPort))
+                    {
+                        outMessage.m_hasMappedAddress = true;
+                    }
                     break;
 
                 case AttributeType::MappedAddress:
-                    // If XOR-MAPPED-ADDRESS was not found, fallback to MAPPED-ADDRESS
-                    if (!outMessage.m_hasMappedAddress)
+                    // XOR-MAPPED-ADDRESS wins when both attributes are present.
+                    if (!outMessage.m_hasMappedAddress
+                        && parseAddressAttribute(attrVal, attrLen, false, outMessage.m_transactionID,
+                                                 outMessage.m_mappedAddress, outMessage.m_mappedPort))
                     {
-                        parseAddressAttribute(attrVal, attrLen, false, outMessage.m_transactionID,
-                                              outMessage.m_mappedAddress, outMessage.m_mappedPort);
                         outMessage.m_hasMappedAddress = true;
                     }
                     break;
 
                 case AttributeType::OtherAddress:
                 case AttributeType::ChangedAddress:
-                    parseAddressAttribute(attrVal, attrLen, false, outMessage.m_transactionID,
-                                          outMessage.m_otherAddress, outMessage.m_otherPort);
-                    outMessage.m_hasOtherAddress = true;
+                    if (parseAddressAttribute(attrVal, attrLen, false, outMessage.m_transactionID,
+                                              outMessage.m_otherAddress, outMessage.m_otherPort))
+                    {
+                        outMessage.m_hasOtherAddress = true;
+                    }
                     break;
 
                 default:

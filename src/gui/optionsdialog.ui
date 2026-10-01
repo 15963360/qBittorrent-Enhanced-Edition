@@ -1945,6 +1945,27 @@ readme[0-9].txt: filter 'readme1.txt', 'readme2.txt' but not 'readme10.txt'.</st
                       </property>
                      </widget>
                     </item>
+                    <item row="2" column="0" rowspan="2">
+                     <widget class="QLabel" name="lblSTUNKeepAliveTransports">
+                      <property name="text">
+                       <string>Keepalive transports:</string>
+                      </property>
+                     </widget>
+                    </item>
+                    <item row="2" column="1">
+                     <widget class="QCheckBox" name="checkSTUNKeepAliveUDP">
+                      <property name="text">
+                       <string>UDP (uTP) - keeps the UDP mapping alive</string>
+                      </property>
+                     </widget>
+                    </item>
+                    <item row="3" column="1">
+                     <widget class="QCheckBox" name="checkSTUNKeepAliveTCP">
+                      <property name="text">
+                       <string>TCP - keeps the TCP mapping alive (needs a STUN server speaking STUN over TCP)</string>
+                      </property>
+                     </widget>
+                    </item>
                    </layout>
                   </item>
                   <item>
@@ -2025,6 +2046,28 @@ readme[0-9].txt: filter 'readme1.txt', 'readme2.txt' but not 'readme10.txt'.</st
                       <widget class="QLabel" name="lblSTUNDualStackValue">
                        <property name="text">
                         <string>N/A</string>
+                       </property>
+                      </widget>
+                     </item>
+                     <item row="3" column="0">
+                      <widget class="QLabel" name="lblSTUNTransportsHeader">
+                       <property name="text">
+                        <string>Transport Mappings:</string>
+                       </property>
+                       <property name="font">
+                        <font>
+                         <bold>true</bold>
+                        </font>
+                       </property>
+                      </widget>
+                     </item>
+                     <item row="3" column="1">
+                      <widget class="QLabel" name="lblSTUNTransportsValue">
+                       <property name="text">
+                        <string>N/A</string>
+                       </property>
+                       <property name="wordWrap">
+                        <bool>true</bool>
                        </property>
                       </widget>
                      </item>

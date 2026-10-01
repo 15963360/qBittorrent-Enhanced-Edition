@@ -380,7 +380,13 @@ namespace BitTorrent
         void setStunServers(const QStringList &servers) override;
         int stunKeepAliveInterval() const override;
         void setStunKeepAliveInterval(int seconds) override;
+        bool isSTUNUdpKeepAliveEnabled() const override;
+        void setSTUNUdpKeepAliveEnabled(bool enabled) override;
+        bool isSTUNTcpKeepAliveEnabled() const override;
+        void setSTUNTcpKeepAliveEnabled(bool enabled) override;
         quint16 stunMappedPort() const override;
+        quint16 stunUdpMappedPort() const override;
+        quint16 stunTcpMappedPort() const override;
         QHostAddress stunMappedAddress() const override;
         STUNStatus stunStatus() const override;
         NATType stunNATType() const override;
@@ -734,6 +740,8 @@ namespace BitTorrent
         CachedSettingValue<bool> m_isSTUNEnabled;
         CachedSettingValue<QString> m_stunServers;
         CachedSettingValue<int> m_stunKeepAliveInterval;
+        CachedSettingValue<bool> m_stunUdpKeepAliveEnabled;
+        CachedSettingValue<bool> m_stunTcpKeepAliveEnabled;
         quint16 m_stunExternalPort {0};
         QHostAddress m_stunExternalAddress;
         std::unique_ptr<STUNManager> m_stunManager;
