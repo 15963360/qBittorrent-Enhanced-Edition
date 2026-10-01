@@ -143,14 +143,22 @@ namespace
 
 namespace BitTorrent
 {
+    // Verified on 2026-10-02 from a CGNAT line in Chongqing: every entry below answered
+    // a Binding Request on UDP, and the last four also answered on TCP. The Chinese
+    // servers are first because they are the fastest (18-52 ms versus 126-287 ms), but
+    // none of them speaks STUN over TCP, so the TCP keepalive channel has to walk past
+    // them to reach a server that can report the public TCP port.
     const QStringList STUNManager::DEFAULT_STUN_SERVERS = {
         QStringLiteral("stun.miwifi.com:3478"),
         QStringLiteral("stun.douyucdn.cn:18000"),
         QStringLiteral("stun.chat.bilibili.com:3478"),
         QStringLiteral("stun.hitv.com:3478"),
-        QStringLiteral("stun.cloudflare.com:3478"),
+        QStringLiteral("fwa.lifesizecloud.com:3478"),
+        QStringLiteral("stun.freeswitch.org:3478"),
+        QStringLiteral("stun.antisip.com:3478"),
+        QStringLiteral("stunserver2025.stunprotocol.org:3478"),
         QStringLiteral("stun1.l.google.com:19302"),
-        QStringLiteral("stun.syncthing.net:3478")
+        QStringLiteral("stun.cloudflare.com:3478")
     };
 
     QString natTypeToString(NATType type)
@@ -290,14 +298,20 @@ namespace BitTorrent
             return;
 
         m_udpKeepAliveEnabled = enabled;
+
         if (!enabled)
         {
-            m_udpMappedAddress.clear();
-            m_udpMappedPort = 0;
             m_udpFailures = 0;
             closeUdpProbe();
-            updateAnnouncedEndpoint();
+            m_udpProbeTimer.stop();
         }
+
+        // The learned mapping is a fact about the carrier, not about this switch, so it
+        // survives being turned off; only what gets announced is recomputed. That keeps
+        // the port known if the switch is turned back on later, which is the only way
+        // it can still be learned on Windows (see startUdpProbe()).
+        updateAnnouncedEndpoint();
+        refreshStatus();
 
         if (m_enabled)
             restart();
@@ -314,16 +328,18 @@ namespace BitTorrent
             return;
 
         m_tcpKeepAliveEnabled = enabled;
+
         if (!enabled)
         {
-            m_tcpMappedAddress.clear();
-            m_tcpMappedPort = 0;
             m_tcpFailures = 0;
             m_tcpServerAnswered = false;
             m_tcpUnsupportedWarned = false;
             closeTcpProbe();
-            updateAnnouncedEndpoint();
+            m_tcpProbeTimer.stop();
         }
+
+        updateAnnouncedEndpoint();
+        refreshStatus();
 
         if (m_enabled)
             restart();
@@ -412,6 +428,8 @@ namespace BitTorrent
         m_enabled = true;
         m_udpFailures = 0;
         m_tcpFailures = 0;
+        m_udpRotations = 0;
+        m_udpUnconfirmedLogged = false;
 
         emit logMessage(QStringLiteral("STUN：保活已启动（本地端口 %1；UDP %2；TCP %3；周期 %4 秒）")
                             .arg(QString::number(m_localPort),
@@ -496,7 +514,8 @@ namespace BitTorrent
             m_servers.append(endpoint);
         }
 
-        m_currentServerIndex = 0;
+        m_udpServerIndex = 0;
+        m_tcpServerIndex = 0;
     }
 
     bool STUNManager::resolveEndpointSync(ServerEndpoint &endpoint)
@@ -532,12 +551,51 @@ namespace BitTorrent
         return true;
     }
 
-    STUNManager::ServerEndpoint *STUNManager::currentServer()
+    int &STUNManager::serverIndex(Transport transport)
     {
-        if (m_servers.isEmpty() || (m_currentServerIndex < 0) || (m_currentServerIndex >= m_servers.size()))
+        return (transport == Transport::Udp) ? m_udpServerIndex : m_tcpServerIndex;
+    }
+
+    STUNManager::ServerEndpoint *STUNManager::serverAt(int index)
+    {
+        if ((index < 0) || (index >= m_servers.size()))
             return nullptr;
 
-        return &m_servers[m_currentServerIndex];
+        return &m_servers[index];
+    }
+
+    STUNManager::ServerEndpoint *STUNManager::currentServer(Transport transport)
+    {
+        if (m_servers.isEmpty())
+            return nullptr;
+
+        int &index = serverIndex(transport);
+        if ((index < 0) || (index >= m_servers.size()))
+            index = 0;
+
+        return &m_servers[index];
+    }
+
+    // The TCP channel skips servers that have already turned out to answer on UDP
+    // only; the UDP channel uses every server. Wraps around at most once. When nothing
+    // else is left it returns the current index, which the caller reports as "no
+    // alternative server" instead of claiming a switch happened.
+    int STUNManager::nextServerIndex(Transport transport, int from) const
+    {
+        const int count = m_servers.size();
+        if (count <= 1)
+            return 0;
+
+        for (int step = 1; step < count; ++step)
+        {
+            const int candidate = (from + step) % count;
+            if ((transport == Transport::Tcp) && m_servers.at(candidate).tcpRefused)
+                continue;
+
+            return candidate;
+        }
+
+        return from;
     }
 
     void STUNManager::ensureResolved(Transport transport)
@@ -545,7 +603,7 @@ namespace BitTorrent
         if (!m_enabled || !isTransportEnabled(transport))
             return;
 
-        ServerEndpoint *endpoint = currentServer();
+        ServerEndpoint *endpoint = currentServer(transport);
         if (!endpoint)
         {
             setStatus(STUNStatus::Error);
@@ -560,7 +618,14 @@ namespace BitTorrent
         }
 
         setStatus(STUNStatus::Resolving);
-        QHostInfo::lookupHost(endpoint->host, this, &STUNManager::onDnsResolved);
+
+        // Resolved per transport with the host captured, so a rotation on one channel
+        // cannot make the other channel's answer land on the wrong endpoint.
+        const QString host = endpoint->host;
+        QHostInfo::lookupHost(host, this, [this, transport, host](const QHostInfo &hostInfo)
+        {
+            onDnsResolved(transport, host, hostInfo);
+        });
     }
 
     void STUNManager::startProbe(Transport transport)
@@ -574,35 +639,31 @@ namespace BitTorrent
             startTcpProbe();
     }
 
-    void STUNManager::onDnsResolved(const QHostInfo &hostInfo)
+    void STUNManager::onDnsResolved(Transport transport, const QString &host, const QHostInfo &hostInfo)
     {
-        if (!m_enabled || m_servers.isEmpty())
+        if (!m_enabled)
             return;
 
-        if ((m_currentServerIndex < 0) || (m_currentServerIndex >= m_servers.size()))
-            return;
+        ServerEndpoint *endpoint = currentServer(transport);
+        if (!endpoint || (endpoint->host != host))
+            return;  // the lookup was started before a rotation on this channel
 
-        ServerEndpoint &endpoint = m_servers[m_currentServerIndex];
-        if (hostInfo.hostName() != endpoint.host)
-            return;  // a lookup that was started before a server switch
-
-        if (endpoint.isResolved)
+        if (endpoint->isResolved)
             return;
 
         const QHostAddress address = firstIPv4Address(hostInfo);
         if (address.isNull())
         {
-            emit logMessage(QStringLiteral("STUN：解析服务器 [%1] 失败：%2，切换备用服务器。")
-                                .arg(endpoint.host, hostInfo.errorString()), true);
-            scheduleServerAdvance(Transport::Udp);
+            emit logMessage(QStringLiteral("STUN：解析服务器 [%1] 失败：%2，切换下一台。")
+                                .arg(host, hostInfo.errorString()), true);
+            scheduleServerAdvance(transport);
             return;
         }
 
-        endpoint.resolvedAddress = address;
-        endpoint.isResolved = true;
+        endpoint->resolvedAddress = address;
+        endpoint->isResolved = true;
 
-        startProbe(Transport::Udp);
-        startProbe(Transport::Tcp);
+        startProbe(transport);
         refreshStatus();
     }
 
@@ -617,16 +678,46 @@ namespace BitTorrent
             return;
         }
 
-        m_currentServerIndex = (m_currentServerIndex + 1) % m_servers.size();
-        m_udpFailures = 0;
-        m_tcpFailures = 0;
+        int &index = serverIndex(transport);
+        const int previous = index;
+        index = nextServerIndex(transport, previous);
 
-        const ServerEndpoint &endpoint = m_servers.at(m_currentServerIndex);
-        emit logMessage(QStringLiteral("STUN：%1 保活连续失败，切换到备用服务器 [%2:%3]。")
-                            .arg(transportName(transport), endpoint.host)
-                            .arg(endpoint.port), true);
+        if (transport == Transport::Udp)
+            m_udpFailures = 0;
+        else
+            m_tcpFailures = 0;
 
-        abortProbes();
+        const ServerEndpoint &endpoint = m_servers.at(index);
+
+        if (index == previous)
+        {
+            // Either a single server is configured, or every alternative is known to be
+            // unusable for this transport. Say that rather than claim a switch that did
+            // not happen.
+            emit logMessage(QStringLiteral("STUN：%1 保活连续失败，但没有其它可用服务器，继续重试 [%2:%3]。")
+                                .arg(transportName(transport), endpoint.host)
+                                .arg(endpoint.port), true);
+        }
+        else
+        {
+            emit logMessage(QStringLiteral("STUN：%1 保活连续失败，切换到备用服务器 [%2:%3]。")
+                                .arg(transportName(transport), endpoint.host)
+                                .arg(endpoint.port), true);
+        }
+
+        // Only this transport's probe is torn down: the channels no longer share a server
+        // index, so a TCP rotation must not disturb an in-flight UDP probe.
+        if (transport == Transport::Udp)
+        {
+            closeUdpProbe();
+            m_udpProbeTimer.stop();
+        }
+        else
+        {
+            closeTcpProbe();
+            m_tcpProbeTimer.stop();
+        }
+
         ensureResolved(transport);
     }
 
@@ -645,7 +736,10 @@ namespace BitTorrent
             return;
         }
 
-        if (hasUdpMapping() || hasTcpMapping())
+        // Mapped means "an endpoint this build is keeping alive is being advertised",
+        // which is exactly when an announced port exists. A mapping that is merely
+        // learned but not maintained does not make the session reachable.
+        if (m_mappedPort > 0)
         {
             setStatus(STUNStatus::Mapped);
             return;
@@ -671,15 +765,21 @@ namespace BitTorrent
         QHostAddress address;
         quint16 port = 0;
 
-        if (m_udpMappedPort > 0)
-        {
-            address = m_udpMappedAddress;
-            port = m_udpMappedPort;
-        }
-        else if (m_tcpMappedPort > 0)
+        // A tracker announce carries one port, so exactly one transport can ever be
+        // advertised. TCP wins when it has a confirmed mapping: its binding exists only
+        // because this build holds a connection open from the listening port, whereas
+        // the carrier keeps the UDP binding alive on its own. A mapping is only eligible
+        // while its keepalive is on, so the announced port is always one that is being
+        // refreshed.
+        if (m_tcpKeepAliveEnabled && (m_tcpMappedPort > 0))
         {
             address = m_tcpMappedAddress;
             port = m_tcpMappedPort;
+        }
+        else if (m_udpKeepAliveEnabled && (m_udpMappedPort > 0))
+        {
+            address = m_udpMappedAddress;
+            port = m_udpMappedPort;
         }
 
         if ((address == m_mappedAddress) && (port == m_mappedPort))
@@ -688,8 +788,8 @@ namespace BitTorrent
         m_mappedAddress = address;
         m_mappedPort = port;
 
-        // A port of 0 means the mapping is gone (keepalive disabled or lost), which
-        // the session has to hear about as well.
+        // A port of 0 means nothing is being advertised any more (keepalive disabled or
+        // lost), which the session has to hear about as well.
         emit mappedEndpointChanged(address, port);
     }
 
@@ -700,7 +800,7 @@ namespace BitTorrent
         if (m_udpPending.active)
             return;  // the previous probe is still in flight
 
-        ServerEndpoint *endpoint = currentServer();
+        ServerEndpoint *endpoint = currentServer(Transport::Udp);
         if (!endpoint || !endpoint->isResolved)
         {
             ensureResolved(Transport::Udp);
@@ -720,8 +820,7 @@ namespace BitTorrent
                                 .arg(m_localPort)
                                 .arg(m_udpProbe->errorString()), true);
             m_udpProbe.reset();
-            ++m_udpFailures;
-            refreshStatus();
+            reportProbeFailure(Transport::Udp, QStringLiteral("无法绑定监听端口"));
             return;
         }
 
@@ -731,7 +830,16 @@ namespace BitTorrent
         m_udpPending.responderPort = endpoint->port;
 
         const BitTorrent::STUN::Message request(BitTorrent::STUN::MessageClass::Request, BitTorrent::STUN::Method::Binding, m_udpPending.id);
-        m_udpProbe->writeDatagram(request.serialize(), endpoint->resolvedAddress, endpoint->port);
+        const qint64 written = m_udpProbe->writeDatagram(request.serialize(), endpoint->resolvedAddress, endpoint->port);
+        if (written <= 0)
+        {
+            // Nothing left the machine, so the carrier binding was not refreshed either.
+            m_udpPending.active = false;
+            m_udpProbe.reset();
+            reportProbeFailure(Transport::Udp, QStringLiteral("报文发送失败"));
+            return;
+        }
+
         m_udpProbeTimer.start(UDP_PROBE_TIMEOUT_MS);
     }
 
@@ -791,13 +899,41 @@ namespace BitTorrent
         closeUdpProbe();
         m_udpProbeTimer.stop();
 
-        if (!success)
+        if (success)
         {
-            reportProbeFailure(Transport::Udp, QStringLiteral("探测超时，未收到响应"));
+            reportProbeSuccess(Transport::Udp, ip, port);
             return;
         }
 
-        reportProbeSuccess(Transport::Udp, ip, port);
+        // Reaching here means the timer fired, and the timer is only started after the
+        // datagram was written. The request therefore did leave the listening port, so
+        // the carrier binding was refreshed whether or not an answer comes back.
+        // Windows hands a unicast reply to whichever socket bound the port first -
+        // libtorrent's, not this probe's - so a probe can keep the mapping alive and
+        // still never see a response.
+        //
+        // While the public port is still unknown it is worth walking the list, because a
+        // server that does answer is the only way to learn it. That search is bounded by
+        // the list; once the list has been walked, silence is reported once and then
+        // accepted, instead of rotating servers and warning forever.
+        if ((m_udpMappedPort == 0) && (m_udpRotations < m_servers.size()))
+        {
+            if (++m_udpFailures >= MAX_PROBE_FAILURES)
+            {
+                ++m_udpRotations;
+                m_udpFailures = 0;
+                emit logMessage(QStringLiteral("STUN：UDP 保活报文已从监听端口发出但未收到回包，换一台服务器试试。"), true);
+                scheduleServerAdvance(Transport::Udp);
+            }
+            return;
+        }
+
+        if (!m_udpUnconfirmedLogged)
+        {
+            m_udpUnconfirmedLogged = true;
+            emit logMessage(QStringLiteral("STUN：UDP 保活报文已从监听端口发出，本机未收到回包"
+                                           "（监听端口上的回包由 libtorrent 的套接字接管）。映射以发送维持。"));
+        }
     }
 
     void STUNManager::startTcpProbe()
@@ -805,7 +941,7 @@ namespace BitTorrent
         if (!m_enabled || !m_tcpKeepAliveEnabled)
             return;
 
-        ServerEndpoint *endpoint = currentServer();
+        ServerEndpoint *endpoint = currentServer(Transport::Tcp);
         if (!endpoint || !endpoint->isResolved)
         {
             ensureResolved(Transport::Tcp);
@@ -943,15 +1079,29 @@ namespace BitTorrent
         }
     }
 
-    void STUNManager::onTcpSocketError()
+    void STUNManager::onTcpSocketError(const QAbstractSocket::SocketError error)
     {
         if (!m_tcpSocket)
             return;
 
         const QString reason = m_tcpSocket->errorString();
+
+        // A refused connection is proof that this server has no STUN listener on TCP,
+        // so the channel never has to waste another timeout on it.
+        if ((error == QAbstractSocket::ConnectionRefusedError) && !m_tcpServerAnswered)
+        {
+            if (ServerEndpoint *endpoint = currentServer(Transport::Tcp))
+                endpoint->tcpRefused = true;
+        }
+
         closeTcpProbe();
         m_tcpProbeTimer.stop();
-        reportProbeFailure(Transport::Tcp, QStringLiteral("连接失败：%1").arg(reason));
+
+        // A stream that never answers costs a full timeout on every round, so while no
+        // TCP mapping has been learned yet the channel does not linger: anything that
+        // cannot report a public TCP port is no use to it, and a server that really is
+        // just slow can be picked up again on the next pass.
+        reportProbeFailure(Transport::Tcp, QStringLiteral("连接失败：%1").arg(reason), true);
     }
 
     void STUNManager::onTcpProbeTimeout()
@@ -962,19 +1112,36 @@ namespace BitTorrent
         if (m_tcpSocket->state() != QAbstractSocket::ConnectedState)
         {
             closeTcpProbe();
-            reportProbeFailure(Transport::Tcp, QStringLiteral("连接超时"));
+            reportProbeFailure(Transport::Tcp, QStringLiteral("连接超时"), true);
             return;
         }
 
         if (!m_tcpPending.active)
             return;
 
-        // The stream is up but the peer never answered the Binding Request, so it most
-        // likely does not speak STUN over TCP. The connection still holds the TCP
-        // binding on the carrier NAT and is therefore kept open.
         m_tcpPending.active = false;
 
-        if (!m_tcpServerAnswered && !m_tcpUnsupportedWarned)
+        if (m_tcpServerAnswered)
+            return;
+
+        // The stream is up but the peer does not answer Binding Requests, so it cannot
+        // tell us the public TCP port - the only reason to keep a TCP channel at all.
+        ++m_tcpFailures;
+
+        if ((m_tcpMappedPort == 0) || (m_tcpFailures >= MAX_PROBE_FAILURES))
+        {
+            if (ServerEndpoint *endpoint = currentServer(Transport::Tcp))
+                endpoint->tcpRefused = true;
+
+            emit logMessage(QStringLiteral("STUN：服务器 [%1:%2] 不接受 TCP 上的 Binding 请求，"
+                                           "无法读取 TCP 公网端口，换下一台。")
+                                .arg(m_tcpServerAddress.toString())
+                                .arg(m_tcpServerPort), true);
+            scheduleServerAdvance(Transport::Tcp);
+            return;
+        }
+
+        if (!m_tcpUnsupportedWarned)
         {
             m_tcpUnsupportedWarned = true;
             emit logMessage(QStringLiteral("STUN：服务器 [%1:%2] 未响应 TCP 上的 Binding 请求，"
@@ -1017,7 +1184,7 @@ namespace BitTorrent
         refreshStatus();
     }
 
-    void STUNManager::reportProbeFailure(Transport transport, const QString &reason)
+    void STUNManager::reportProbeFailure(Transport transport, const QString &reason, const bool rotateImmediately)
     {
         int &failures = (transport == Transport::Udp) ? m_udpFailures : m_tcpFailures;
         ++failures;
@@ -1026,7 +1193,13 @@ namespace BitTorrent
                             .arg(transportName(transport), reason)
                             .arg(failures), true);
 
-        if (failures >= MAX_PROBE_FAILURES)
+        // A UDP heartbeat that was merely not answered is ambiguous (the reply may have
+        // gone to libtorrent's socket), so it takes MAX_PROBE_FAILURES rounds before the
+        // server is given up on. A TCP connect that never completed is not ambiguous, and
+        // walking the list immediately is what keeps the first search short: with a 25 s
+        // interval, waiting three rounds per server would take minutes to reach one that
+        // speaks STUN over TCP.
+        if (rotateImmediately || (failures >= MAX_PROBE_FAILURES))
             scheduleServerAdvance(transport);
     }
 
@@ -1052,13 +1225,10 @@ namespace BitTorrent
         // announcing a port that is not reachable from the outside.
         for (int attempt = 0; attempt < m_servers.size(); ++attempt)
         {
-            if ((m_currentServerIndex < 0) || (m_currentServerIndex >= m_servers.size()))
-                m_currentServerIndex = 0;
-
-            ServerEndpoint &endpoint = m_servers[m_currentServerIndex];
+            ServerEndpoint &endpoint = m_servers[serverIndex(Transport::Udp)];
             if (!resolveEndpointSync(endpoint))
             {
-                m_currentServerIndex = (m_currentServerIndex + 1) % m_servers.size();
+                serverIndex(Transport::Udp) = nextServerIndex(Transport::Udp, serverIndex(Transport::Udp));
                 continue;
             }
 
@@ -1119,7 +1289,7 @@ namespace BitTorrent
             emit logMessage(QStringLiteral("STUN：服务器 [%1:%2] 无响应，尝试下一台。")
                                 .arg(endpoint.host)
                                 .arg(endpoint.port), true);
-            m_currentServerIndex = (m_currentServerIndex + 1) % m_servers.size();
+            serverIndex(Transport::Udp) = nextServerIndex(Transport::Udp, serverIndex(Transport::Udp));
         }
 
         emit logMessage(QStringLiteral("STUN：所有 STUN 服务器均未响应，未能建立公网映射。"), true);

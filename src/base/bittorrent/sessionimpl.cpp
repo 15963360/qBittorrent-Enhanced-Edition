@@ -502,7 +502,7 @@ SessionImpl::SessionImpl(QObject *parent)
     , m_stunServers(BITTORRENT_SESSION_KEY(u"STUNServers"_s), STUNManager::DEFAULT_STUN_SERVERS.join(u';'))
     , m_stunKeepAliveInterval(BITTORRENT_SESSION_KEY(u"STUNKeepAliveInterval"_s), STUNManager::DEFAULT_KEEPALIVE_INTERVAL_SEC)
     , m_stunUdpKeepAliveEnabled(BITTORRENT_SESSION_KEY(u"STUNKeepAliveUDP"_s), true)
-    , m_stunTcpKeepAliveEnabled(BITTORRENT_SESSION_KEY(u"STUNKeepAliveTCP"_s), false)
+    , m_stunTcpKeepAliveEnabled(BITTORRENT_SESSION_KEY(u"STUNKeepAliveTCP"_s), true)
     , m_maxConcurrentHTTPAnnounces(BITTORRENT_SESSION_KEY(u"MaxConcurrentHTTPAnnounces"_s), 50)
     , m_isReannounceWhenAddressChangedEnabled(BITTORRENT_SESSION_KEY(u"ReannounceWhenAddressChanged"_s), false)
     , m_stopTrackerTimeout(BITTORRENT_SESSION_KEY(u"StopTrackerTimeout"_s), 2)
@@ -2178,11 +2178,9 @@ lt::settings_pack SessionImpl::loadLTSettings() const
     case BTProtocol::TCP:
         settingsPack.set_bool(lt::settings_pack::enable_incoming_tcp, true);
         settingsPack.set_bool(lt::settings_pack::enable_outgoing_tcp, true);
+        // Incoming uTP stays on while STUN is active so a punched UDP mapping can still
+        // be used, even though every tracker announce carries the single port below.
         settingsPack.set_bool(lt::settings_pack::enable_incoming_utp, isSTUNEnabled());
-        settingsPack.set_bool(lt::settings_pack::enable_outgoing_utp, false);
-        break;
-        settingsPack.set_bool(lt::settings_pack::enable_outgoing_tcp, true);
-        settingsPack.set_bool(lt::settings_pack::enable_incoming_utp, false);
         settingsPack.set_bool(lt::settings_pack::enable_outgoing_utp, false);
         break;
 
@@ -5257,8 +5255,10 @@ void SessionImpl::onSTUNMappedEndpointChanged(const QHostAddress &ip, quint16 po
     if (m_stunUdpKeepAliveEnabled && m_stunTcpKeepAliveEnabled && (udpPort > 0) && (tcpPort > 0)
         && (udpPort != tcpPort))
     {
-        mappingDetail += QStringLiteral("  ⚠ 运营商为 TCP 与 UDP 分配了不同端口，"
-                                        "通告端口 %1 只能服务其中一种协议。\n").arg(port);
+        mappingDetail += QStringLiteral("  ⚠ 运营商为 TCP 与 UDP 分配了不同端口，通告端口 %1 只能服务其中一种协议"
+                                        "（当前通告 %2）。\n")
+                             .arg(port)
+                             .arg((tcpPort == port) ? QStringLiteral("TCP") : QStringLiteral("UDP"));
     }
 
     LogMsg(QStringLiteral("[STUN 穿透] 运营商大内网映射已更新:\n"

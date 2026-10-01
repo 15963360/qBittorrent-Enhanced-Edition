@@ -7211,6 +7211,50 @@ readme[0-9].txt：過濾「readme1.txt」、「readme2.txt」但不包含「read
         <translation>心跳保活週期:</translation>
     </message>
     <message>
+        <source>Keepalive transports:</source>
+        <translation>保活傳輸協定:</translation>
+    </message>
+    <message>
+        <source>UDP (uTP) - keeps the UDP mapping alive</source>
+        <translation>UDP (uTP) - 維持 UDP 對應存活</translation>
+    </message>
+    <message>
+        <source>TCP - keeps the TCP mapping alive (needs a STUN server speaking STUN over TCP)</source>
+        <translation>TCP - 維持 TCP 對應存活 (需要伺服器支援在 TCP 上回應 STUN)</translation>
+    </message>
+    <message>
+        <source>Transport Mappings:</source>
+        <translation>傳輸通道對應：</translation>
+    </message>
+    <message>
+        <source>Mapped (announced endpoint available)</source>
+        <translation>🟢 已對應 (已有可通告的端點)</translation>
+    </message>
+    <message>
+        <source>%1 mapping: %2</source>
+        <translation>%1 對應：%2</translation>
+    </message>
+    <message>
+        <source>%1 mapping: %2 (keepalive off)</source>
+        <translation>%1 對應：%2（未保活）</translation>
+    </message>
+    <message>
+        <source>%1 mapping: pending</source>
+        <translation>%1 對應：待建立</translation>
+    </message>
+    <message>
+        <source>%1 mapping: disabled</source>
+        <translation>%1 對應：未啟用</translation>
+    </message>
+    <message>
+        <source>Trackers are told the %1 port; only that protocol can be reached from outside.</source>
+        <translation>向 Tracker 通告的是 %1 埠；外部只有該協定能連入。</translation>
+    </message>
+    <message>
+        <source>The carrier assigned different ports to TCP and UDP, so the announced port can only serve one of them.</source>
+        <translation>電信業者為 TCP 與 UDP 分配了不同埠，通告埠只能服務其中一種協定。</translation>
+    </message>
+    <message>
         <source>Test NAT Type (RFC 5780)</source>
         <translation>檢測 NAT 類型 (RFC 5780)</translation>
     </message>

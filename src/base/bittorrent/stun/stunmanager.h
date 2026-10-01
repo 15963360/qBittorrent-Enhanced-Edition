@@ -78,8 +78,9 @@ namespace BitTorrent
         STUNStatus status() const;
         NATType natType() const;
 
-        // Endpoint announced to trackers and peers. The UDP mapping is preferred
-        // because uTP is the transport that survives carrier-grade NAT.
+        // Endpoint announced to trackers and peers. Trackers carry a single port, so
+        // only one of the two transports can ever be advertised; see
+        // updateAnnouncedEndpoint() for which one wins.
         QHostAddress mappedAddress() const;
         quint16 mappedPort() const;
 
@@ -111,12 +112,11 @@ namespace BitTorrent
 
     private slots:
         void onKeepAliveTimeout();
-        void onDnsResolved(const QHostInfo &hostInfo);
         void onUdpProbeReadyRead();
         void onUdpProbeTimeout();
         void onTcpConnected();
         void onTcpReadyRead();
-        void onTcpSocketError();
+        void onTcpSocketError(QAbstractSocket::SocketError error);
         void onTcpProbeTimeout();
 
     private:
@@ -128,6 +128,10 @@ namespace BitTorrent
             quint16 port {3478};
             QHostAddress resolvedAddress;
             bool isResolved {false};
+            // STUN over TCP is optional in RFC 5389 and most public servers do not
+            // offer it. Once a server has proved it does not, the TCP channel skips
+            // it instead of paying a fresh timeout on every rotation.
+            bool tcpRefused {false};
         };
 
         struct PendingProbe
@@ -140,8 +144,12 @@ namespace BitTorrent
 
         void parseServerList();
         bool resolveEndpointSync(ServerEndpoint &endpoint);
-        ServerEndpoint *currentServer();
+        int &serverIndex(Transport transport);
+        ServerEndpoint *serverAt(int index);
+        ServerEndpoint *currentServer(Transport transport);
+        int nextServerIndex(Transport transport, int from) const;
         void ensureResolved(Transport transport);
+        void onDnsResolved(Transport transport, const QString &host, const QHostInfo &hostInfo);
         void startProbe(Transport transport);
         void advanceServer(Transport transport);
         void scheduleServerAdvance(Transport transport);
@@ -162,7 +170,7 @@ namespace BitTorrent
 
         bool bindToLocalPort(QAbstractSocket &socket) const;
         void reportProbeSuccess(Transport transport, const QHostAddress &ip, quint16 port);
-        void reportProbeFailure(Transport transport, const QString &reason);
+        void reportProbeFailure(Transport transport, const QString &reason, bool rotateImmediately = false);
         bool isTransportEnabled(Transport transport) const;
         QString transportName(Transport transport) const;
 
@@ -170,15 +178,22 @@ namespace BitTorrent
         quint16 m_localPort {0};
         QStringList m_serverStrings;
         QList<ServerEndpoint> m_servers;
-        int m_currentServerIndex {0};
+        // Each transport walks the list on its own: the Chinese servers answer on UDP
+        // only, so a shared index would drag the UDP channel off a working server
+        // every time the TCP channel rotated past them.
+        int m_udpServerIndex {0};
+        int m_tcpServerIndex {0};
         int m_keepAliveIntervalSec {DEFAULT_KEEPALIVE_INTERVAL_SEC};
 
         bool m_udpKeepAliveEnabled {true};
-        bool m_tcpKeepAliveEnabled {false};
+        bool m_tcpKeepAliveEnabled {true};
 
         STUNStatus m_status {STUNStatus::Disabled};
         NATType m_natType {NATType::Unknown};
 
+        // Last known public mapping per transport. These are facts about the carrier,
+        // independent of whether this build keeps them alive, so turning a keepalive
+        // off does not erase them.
         QHostAddress m_udpMappedAddress;
         quint16 m_udpMappedPort {0};
         QHostAddress m_tcpMappedAddress;
@@ -193,6 +208,11 @@ namespace BitTorrent
         PendingProbe m_udpPending;
         QTimer m_udpProbeTimer;
         int m_udpFailures {0};
+        // How many servers the UDP channel has already walked while trying to learn the
+        // public port. Bounded, so a machine that cannot receive the replies settles on
+        // one server instead of rotating forever.
+        int m_udpRotations {0};
+        bool m_udpUnconfirmedLogged {false};
 
         // TCP channel: one connection is kept open, because a carrier-grade NAT only
         // keeps the TCP binding while something is flowing from the listening port.
@@ -207,7 +227,6 @@ namespace BitTorrent
         bool m_tcpUnsupportedWarned {false};
 
         QTimer m_keepAliveTimer;
-        bool m_advanceScheduled {false};
 
         // RFC 5780 diagnostics run on a private pool so they cannot occupy the global
         // pool, and their lifetime is bounded by this object.

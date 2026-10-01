@@ -274,7 +274,7 @@ void StatusBar::updateExternalAddressesLabel()
 
     const auto *session = BitTorrent::Session::instance();
     if (session->isSTUNEnabled() && (session->stunMappedPort() > 0))
-        addressText += u" (STUN: :" + QString::number(session->stunMappedPort()) + u')';
+        addressText += u" (STUN: " + QString::number(session->stunMappedPort()) + u')';
 
     m_lastExternalIPsLbl->setText(addressText);
 }

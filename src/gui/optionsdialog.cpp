@@ -1099,9 +1099,9 @@ void OptionsDialog::updateSTUNStatusDisplay()
     switch (status)
     {
     case BitTorrent::STUNStatus::Mapped:
-        // Reaching this state only means the mapping was confirmed; the NAT type is
-        // reported separately by the diagnostic and is never assumed here.
-        m_ui->lblSTUNStatusValue->setText(tr("Mapped (at least one transport reachable)"));
+        // Reaching this state only means an endpoint is being advertised; the NAT type
+        // is reported separately by the diagnostic and is never assumed here.
+        m_ui->lblSTUNStatusValue->setText(tr("Mapped (announced endpoint available)"));
         break;
     case BitTorrent::STUNStatus::Probing:
         m_ui->lblSTUNStatusValue->setText(tr("Probing mapping..."));
@@ -1133,15 +1133,34 @@ void OptionsDialog::updateSTUNStatusDisplay()
     m_ui->lblSTUNDualStackValue->setText(QStringLiteral("IPv4: %1 | IPv6: %2")
         .arg(QString::number(localPort), QString::number(announcedPort)));
 
-    const QString udpText = session->isSTUNUdpKeepAliveEnabled()
-        ? ((udpMappedPort > 0) ? tr("UDP: %1").arg(QString::number(udpMappedPort)) : tr("UDP: pending"))
-        : tr("UDP: disabled");
-    const QString tcpText = session->isSTUNTcpKeepAliveEnabled()
-        ? ((tcpMappedPort > 0) ? tr("TCP: %1").arg(QString::number(tcpMappedPort)) : tr("TCP: pending"))
-        : tr("TCP: disabled");
+    // A tracker announce carries a single port, so only one transport can be advertised.
+    // TCP is preferred because its binding exists only while the keepalive holds it; a
+    // mapping is reported here even when its keepalive is off, because it is still a fact
+    // about the carrier, but it is then marked as not being refreshed.
+    const bool tcpAnnounced = session->isSTUNTcpKeepAliveEnabled() && (tcpMappedPort > 0);
+    const bool udpAnnounced = !tcpAnnounced && session->isSTUNUdpKeepAliveEnabled() && (udpMappedPort > 0);
 
-    QString transports = udpText + QStringLiteral("  |  ") + tcpText;
-    if ((udpMappedPort > 0) && (tcpMappedPort > 0) && (udpMappedPort != tcpMappedPort))
+    const auto describe = [](const QString &name, const quint16 mappedPort, const bool enabled)
+    {
+        if (mappedPort == 0)
+            return enabled ? tr("%1 mapping: pending").arg(name) : tr("%1 mapping: disabled").arg(name);
+
+        return enabled ? tr("%1 mapping: %2").arg(name, QString::number(mappedPort))
+                       : tr("%1 mapping: %2 (keepalive off)").arg(name, QString::number(mappedPort));
+    };
+
+    QString transports = describe(QStringLiteral("UDP"), udpMappedPort, session->isSTUNUdpKeepAliveEnabled())
+        + QStringLiteral("  |  ")
+        + describe(QStringLiteral("TCP"), tcpMappedPort, session->isSTUNTcpKeepAliveEnabled());
+
+    if (tcpAnnounced || udpAnnounced)
+    {
+        transports += QStringLiteral("\n")
+            + tr("Trackers are told the %1 port; only that protocol can be reached from outside.")
+                  .arg(tcpAnnounced ? QStringLiteral("TCP") : QStringLiteral("UDP"));
+    }
+
+    if (tcpAnnounced && (udpMappedPort > 0) && (udpMappedPort != tcpMappedPort))
     {
         transports += QStringLiteral("\n")
             + tr("The carrier assigned different ports to TCP and UDP, so the announced port can only serve one of them.");
