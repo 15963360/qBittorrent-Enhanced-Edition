@@ -7227,6 +7227,10 @@ readme[0-9].txt：過濾「readme1.txt」、「readme2.txt」但不包含「read
         <translation>恢復預設</translation>
     </message>
     <message>
+        <source>Tried in this order. The TCP keepalive can only use a server that answers STUN over TCP, so keep those first.</source>
+        <translation>依此順序嘗試。TCP 保活只能用支援在 TCP 上回應 STUN 的伺服器，請將它們放在最前面。</translation>
+    </message>
+    <message>
         <source>Fill in the built-in server list, verified against each server over UDP and TCP</source>
         <translation>填入內建伺服器列表（每台均已實測 UDP 與 TCP 可用性）</translation>
     </message>

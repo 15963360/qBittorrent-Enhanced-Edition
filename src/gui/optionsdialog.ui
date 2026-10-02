@@ -1920,7 +1920,11 @@ readme[0-9].txt: filter 'readme1.txt', 'readme2.txt' but not 'readme10.txt'.</st
                      </widget>
                     </item>
                     <item row="0" column="1">
-                     <widget class="QLineEdit" name="textSTUNServers"/>
+                     <widget class="QLineEdit" name="textSTUNServers">
+                      <property name="toolTip">
+                       <string>Tried in this order. The TCP keepalive can only use a server that answers STUN over TCP, so keep those first.</string>
+                      </property>
+                     </widget>
                     </item>
                     <item row="0" column="2">
                      <widget class="QPushButton" name="btnRestoreSTUNServers">

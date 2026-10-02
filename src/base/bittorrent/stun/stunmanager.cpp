@@ -143,22 +143,24 @@ namespace
 
 namespace BitTorrent
 {
-    // Verified on 2026-10-02 from a CGNAT line in Chongqing: every entry below answered
-    // a Binding Request on UDP, and the last four also answered on TCP. The Chinese
-    // servers are first because they are the fastest (18-52 ms versus 126-287 ms), but
-    // none of them speaks STUN over TCP, so the TCP keepalive channel has to walk past
-    // them to reach a server that can report the public TCP port.
+    // Verified on 2026-10-02 from a CGNAT line in Chongqing. The order matters and is not
+    // a latency ranking: the TCP keepalive channel walks the list from the head, and only
+    // a server that answers STUN over TCP can report the public TCP port - which is the
+    // port this build advertises. So the entries that speak TCP come first. They answer on
+    // UDP as well, so the UDP channel loses nothing but the ~100 ms it would have saved.
+    // The mainland servers are next (they are the fastest, but none of them speaks STUN
+    // over TCP), and the overseas UDP-only ones are last.
     const QStringList STUNManager::DEFAULT_STUN_SERVERS = {
-        QStringLiteral("stun.miwifi.com:3478"),
-        QStringLiteral("stun.douyucdn.cn:18000"),
-        QStringLiteral("stun.chat.bilibili.com:3478"),
-        QStringLiteral("stun.hitv.com:3478"),
-        QStringLiteral("fwa.lifesizecloud.com:3478"),
-        QStringLiteral("stun.freeswitch.org:3478"),
-        QStringLiteral("stun.antisip.com:3478"),
-        QStringLiteral("stunserver2025.stunprotocol.org:3478"),
-        QStringLiteral("stun1.l.google.com:19302"),
-        QStringLiteral("stun.cloudflare.com:3478")
+        QStringLiteral("fwa.lifesizecloud.com:3478"),            // UDP+TCP, 126 ms
+        QStringLiteral("stun.antisip.com:3478"),                 // UDP+TCP, 233 ms
+        QStringLiteral("stunserver2025.stunprotocol.org:3478"),  // UDP+TCP, 270 ms
+        QStringLiteral("stun.freeswitch.org:3478"),              // UDP+TCP, 287 ms
+        QStringLiteral("stun.douyucdn.cn:18000"),                // UDP only, 18 ms
+        QStringLiteral("stun.hitv.com:3478"),                    // UDP only, 31 ms
+        QStringLiteral("stun.chat.bilibili.com:3478"),           // UDP only, 45 ms
+        QStringLiteral("stun.miwifi.com:3478"),                  // UDP only, 52 ms
+        QStringLiteral("stun1.l.google.com:19302"),              // UDP only, 93 ms
+        QStringLiteral("stun.cloudflare.com:3478")               // UDP only, 221 ms
     };
 
     QString natTypeToString(NATType type)
