@@ -54,6 +54,7 @@ add_library(qbt_base STATIC
     bittorrent/trackerentrystatus.h
     bittorrent/stun/stunmanager.h
     bittorrent/stun/stunmessage.h
+    bittorrent/stun/stuntcpchannel.h
     concepts/explicitlyconvertibleto.h
     concepts/stringable.h
     digest32.h
@@ -166,6 +167,7 @@ add_library(qbt_base STATIC
     bittorrent/trackerentrystatus.cpp
     bittorrent/stun/stunmanager.cpp
     bittorrent/stun/stunmessage.cpp
+    bittorrent/stun/stuntcpchannel.cpp
     exceptions.cpp
     freediskspacechecker.cpp
     http/connection.cpp

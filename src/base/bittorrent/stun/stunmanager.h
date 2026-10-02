@@ -3,17 +3,16 @@
 #include <atomic>
 #include <memory>
 
-#include <QByteArray>
 #include <QHostAddress>
 #include <QHostInfo>
 #include <QObject>
 #include <QStringList>
-#include <QTcpSocket>
 #include <QThreadPool>
 #include <QTimer>
 #include <QUdpSocket>
 
 #include "stunmessage.h"
+#include "stuntcpchannel.h"
 
 namespace BitTorrent
 {
@@ -48,7 +47,6 @@ namespace BitTorrent
         static constexpr int MIN_KEEPALIVE_INTERVAL_SEC = 10;
         static constexpr int MAX_KEEPALIVE_INTERVAL_SEC = 300;
         static constexpr int UDP_PROBE_TIMEOUT_MS = 900;
-        static constexpr int TCP_PROBE_TIMEOUT_MS = 4000;
         static constexpr int MAX_PROBE_FAILURES = 3;
         static constexpr int NAT_TEST_TIMEOUT_MS = 1500;
 
@@ -114,10 +112,9 @@ namespace BitTorrent
         void onKeepAliveTimeout();
         void onUdpProbeReadyRead();
         void onUdpProbeTimeout();
-        void onTcpConnected();
-        void onTcpReadyRead();
-        void onTcpSocketError(QAbstractSocket::SocketError error);
-        void onTcpProbeTimeout();
+        void onTcpMapped(const QHostAddress &ip, quint16 port);
+        void onTcpConnectFailed(const QString &reason);
+        void onTcpBindingUnanswered();
 
     private:
         enum class Transport { Udp, Tcp };
@@ -160,10 +157,6 @@ namespace BitTorrent
         void startUdpProbe();
         void closeUdpProbe();
         void finishUdpProbe(bool success, const QHostAddress &ip = QHostAddress(), quint16 port = 0);
-
-        void startTcpProbe();
-        void closeTcpProbe();
-        void sendTcpBindingRequest();
 
         void abortProbes();
         void stopInternal(bool disabledByUser);
@@ -214,17 +207,10 @@ namespace BitTorrent
         int m_udpRotations {0};
         bool m_udpUnconfirmedLogged {false};
 
-        // TCP channel: one connection is kept open, because a carrier-grade NAT only
-        // keeps the TCP binding while something is flowing from the listening port.
-        std::unique_ptr<QTcpSocket> m_tcpSocket;
-        QByteArray m_tcpBuffer;
-        PendingProbe m_tcpPending;
-        QTimer m_tcpProbeTimer;
-        QHostAddress m_tcpServerAddress;
-        quint16 m_tcpServerPort {0};
+        // TCP channel: one connection from the listening port, rebuilt whenever the
+        // server closes it. See STUNTcpChannel for why a closure is not a failure.
+        STUNTcpChannel m_tcpChannel;
         int m_tcpFailures {0};
-        bool m_tcpServerAnswered {false};
-        bool m_tcpUnsupportedWarned {false};
 
         QTimer m_keepAliveTimer;
 

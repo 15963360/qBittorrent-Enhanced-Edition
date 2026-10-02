@@ -3,14 +3,9 @@
 #include <QDateTime>
 #include <QElapsedTimer>
 #include <QNetworkDatagram>
-#include <QtEndian>
 
 namespace
 {
-    // A STUN message larger than this over TCP means we lost framing; drop the
-    // connection rather than accumulating an unbounded buffer.
-    constexpr int MAX_TCP_FRAME_BYTES = 4096;
-
     QHostAddress firstIPv4Address(const QHostInfo &hostInfo)
     {
         for (const QHostAddress &address : hostInfo.addresses())
@@ -56,18 +51,6 @@ namespace
         const int parsed = value.mid(colonIndex + 1).toInt(&ok);
         if (ok && (parsed > 0) && (parsed <= 65535))
             port = static_cast<quint16>(parsed);
-    }
-
-    // STUN over TCP (RFC 5389 7.2.2) is framed by the length field in its own header.
-    // Returns -1 while the header itself is still incomplete.
-    int stunFrameSize(const QByteArray &buffer)
-    {
-        if (buffer.size() < BitTorrent::STUN::HEADER_SIZE)
-            return -1;
-
-        const quint16 bodyLength = qFromBigEndian<quint16>(
-            reinterpret_cast<const uchar *>(buffer.constData()) + 2);
-        return BitTorrent::STUN::HEADER_SIZE + bodyLength;
     }
 
     struct BindingResult
@@ -211,10 +194,11 @@ namespace BitTorrent
 
         connect(&m_keepAliveTimer, &QTimer::timeout, this, &STUNManager::onKeepAliveTimeout);
         connect(&m_udpProbeTimer, &QTimer::timeout, this, &STUNManager::onUdpProbeTimeout);
-        connect(&m_tcpProbeTimer, &QTimer::timeout, this, &STUNManager::onTcpProbeTimeout);
+        connect(&m_tcpChannel, &STUNTcpChannel::mapped, this, &STUNManager::onTcpMapped);
+        connect(&m_tcpChannel, &STUNTcpChannel::connectFailed, this, &STUNManager::onTcpConnectFailed);
+        connect(&m_tcpChannel, &STUNTcpChannel::bindingUnanswered, this, &STUNManager::onTcpBindingUnanswered);
 
         m_udpProbeTimer.setSingleShot(true);
-        m_tcpProbeTimer.setSingleShot(true);
 
         parseServerList();
     }
@@ -258,6 +242,7 @@ namespace BitTorrent
             return;
 
         m_localPort = port;
+        m_tcpChannel.setLocalPort(port);
         if (m_enabled)
             restart();
     }
@@ -334,10 +319,7 @@ namespace BitTorrent
         if (!enabled)
         {
             m_tcpFailures = 0;
-            m_tcpServerAnswered = false;
-            m_tcpUnsupportedWarned = false;
-            closeTcpProbe();
-            m_tcpProbeTimer.stop();
+            m_tcpChannel.stop();
         }
 
         updateAnnouncedEndpoint();
@@ -471,9 +453,8 @@ namespace BitTorrent
     void STUNManager::abortProbes()
     {
         closeUdpProbe();
-        closeTcpProbe();
         m_udpProbeTimer.stop();
-        m_tcpProbeTimer.stop();
+        m_tcpChannel.stop();
     }
 
     bool STUNManager::bindToLocalPort(QAbstractSocket &socket) const
@@ -636,9 +617,19 @@ namespace BitTorrent
             return;
 
         if (transport == Transport::Udp)
+        {
             startUdpProbe();
-        else
-            startTcpProbe();
+            return;
+        }
+
+        const ServerEndpoint *endpoint = currentServer(Transport::Tcp);
+        if (!endpoint || !endpoint->isResolved)
+        {
+            ensureResolved(Transport::Tcp);
+            return;
+        }
+
+        m_tcpChannel.start(endpoint->resolvedAddress, endpoint->port);
     }
 
     void STUNManager::onDnsResolved(Transport transport, const QString &host, const QHostInfo &hostInfo)
@@ -716,8 +707,7 @@ namespace BitTorrent
         }
         else
         {
-            closeTcpProbe();
-            m_tcpProbeTimer.stop();
+            m_tcpChannel.stop();
         }
 
         ensureResolved(transport);
@@ -938,219 +928,39 @@ namespace BitTorrent
         }
     }
 
-    void STUNManager::startTcpProbe()
+    void STUNManager::onTcpMapped(const QHostAddress &ip, quint16 port)
     {
-        if (!m_enabled || !m_tcpKeepAliveEnabled)
-            return;
-
-        ServerEndpoint *endpoint = currentServer(Transport::Tcp);
-        if (!endpoint || !endpoint->isResolved)
-        {
-            ensureResolved(Transport::Tcp);
-            return;
-        }
-
-        if (m_tcpSocket)
-        {
-            // An attempt is already in flight; let it finish or time out.
-            if (m_tcpSocket->state() == QAbstractSocket::ConnectingState)
-                return;
-
-            if (m_tcpSocket->state() == QAbstractSocket::ConnectedState)
-            {
-                const bool sameServer = (m_tcpServerAddress == endpoint->resolvedAddress)
-                                        && (m_tcpServerPort == endpoint->port);
-                if (sameServer)
-                {
-                    sendTcpBindingRequest();  // keep the binding warm on the open connection
-                    return;
-                }
-            }
-        }
-
-        // A carrier NAT ties the TCP binding to the source port of the SYN, so every
-        // new attempt has to leave from the listening port again. The socket is
-        // rebuilt instead of reused, because abort() also drops the bind.
-        closeTcpProbe();
-
-        m_tcpSocket = std::make_unique<QTcpSocket>();
-        connect(m_tcpSocket.get(), &QTcpSocket::connected, this, &STUNManager::onTcpConnected);
-        connect(m_tcpSocket.get(), &QTcpSocket::readyRead, this, &STUNManager::onTcpReadyRead);
-        connect(m_tcpSocket.get(), &QTcpSocket::errorOccurred, this, &STUNManager::onTcpSocketError);
-
-        if (!bindToLocalPort(*m_tcpSocket))
-        {
-            emit logMessage(QStringLiteral("STUN：无法在本地端口 %1 上绑定 TCP 保活套接字（%2）。")
-                                .arg(m_localPort)
-                                .arg(m_tcpSocket->errorString()), true);
-            m_tcpSocket.reset();
-            ++m_tcpFailures;
-            refreshStatus();
-            return;
-        }
-
-        m_tcpServerAddress = endpoint->resolvedAddress;
-        m_tcpServerPort = endpoint->port;
-        m_tcpBuffer.clear();
-        m_tcpServerAnswered = false;
-        m_tcpUnsupportedWarned = false;
-
-        m_tcpSocket->connectToHost(endpoint->resolvedAddress, endpoint->port);
-        m_tcpProbeTimer.start(TCP_PROBE_TIMEOUT_MS);
-        refreshStatus();
+        m_tcpFailures = 0;
+        reportProbeSuccess(Transport::Tcp, ip, port);
     }
 
-    void STUNManager::closeTcpProbe()
+    void STUNManager::onTcpConnectFailed(const QString &reason)
     {
-        m_tcpPending.active = false;
-        m_tcpBuffer.clear();
+        // The channel only reports this when the server never answered, so the connection
+        // itself is the evidence: refused, timed out, or dropped before any Binding
+        // response. Such a server cannot report the public TCP port, and retrying it on
+        // every round would cost a full timeout each time.
+        if (ServerEndpoint *endpoint = currentServer(Transport::Tcp))
+            endpoint->tcpRefused = true;
 
-        if (m_tcpSocket)
-        {
-            m_tcpSocket->disconnect(this);
-            m_tcpSocket->abort();
-        }
+        reportProbeFailure(Transport::Tcp, reason, true);
     }
 
-    void STUNManager::onTcpConnected()
+    void STUNManager::onTcpBindingUnanswered()
     {
-        m_tcpBuffer.clear();
-        m_tcpServerAnswered = false;
-        sendTcpBindingRequest();
-    }
-
-    void STUNManager::sendTcpBindingRequest()
-    {
-        if (!m_tcpSocket || (m_tcpSocket->state() != QAbstractSocket::ConnectedState))
-            return;
-
-        m_tcpPending.active = true;
-        m_tcpPending.id = BitTorrent::STUN::TransactionID::generate();
-        m_tcpPending.responderAddress = m_tcpServerAddress;
-        m_tcpPending.responderPort = m_tcpServerPort;
-
-        const BitTorrent::STUN::Message request(BitTorrent::STUN::MessageClass::Request, BitTorrent::STUN::Method::Binding, m_tcpPending.id);
-        m_tcpSocket->write(request.serialize());
-        m_tcpProbeTimer.start(TCP_PROBE_TIMEOUT_MS);
-    }
-
-    void STUNManager::onTcpReadyRead()
-    {
-        if (!m_tcpSocket)
-            return;
-
-        m_tcpBuffer.append(m_tcpSocket->readAll());
-
-        while (true)
+        // Connected, but several Binding Requests in a row went without an answer, so
+        // this server does not speak STUN over TCP. Remember that and move on; the
+        // mapping learned earlier, if any, stays announced.
+        if (ServerEndpoint *endpoint = currentServer(Transport::Tcp))
         {
-            const int frameSize = stunFrameSize(m_tcpBuffer);
-            if (frameSize < 0)
-                return;  // header still incomplete
-
-            if (frameSize > MAX_TCP_FRAME_BYTES)
-            {
-                emit logMessage(QStringLiteral("STUN：TCP 保活通道收到异常帧，重建连接。"), true);
-                closeTcpProbe();
-                scheduleServerAdvance(Transport::Tcp);
-                return;
-            }
-
-            if (m_tcpBuffer.size() < frameSize)
-                return;
-
-            const QByteArray frame = m_tcpBuffer.left(frameSize);
-            m_tcpBuffer.remove(0, frameSize);
-
-            BitTorrent::STUN::Message response;
-            if (!BitTorrent::STUN::Message::parse(frame, response))
-                continue;
-            if (!m_tcpPending.active)
-                continue;
-            if (!response.isSuccessResponse())
-                continue;
-            if (response.transactionID() != m_tcpPending.id)
-                continue;
-            if (!response.hasMappedAddress())
-                continue;
-
-            m_tcpPending.active = false;
-            m_tcpProbeTimer.stop();
-            m_tcpServerAnswered = true;
-            reportProbeSuccess(Transport::Tcp, response.mappedAddress(), response.mappedPort());
-            return;
-        }
-    }
-
-    void STUNManager::onTcpSocketError(const QAbstractSocket::SocketError error)
-    {
-        if (!m_tcpSocket)
-            return;
-
-        const QString reason = m_tcpSocket->errorString();
-
-        // A refused connection is proof that this server has no STUN listener on TCP,
-        // so the channel never has to waste another timeout on it.
-        if ((error == QAbstractSocket::ConnectionRefusedError) && !m_tcpServerAnswered)
-        {
-            if (ServerEndpoint *endpoint = currentServer(Transport::Tcp))
-                endpoint->tcpRefused = true;
-        }
-
-        closeTcpProbe();
-        m_tcpProbeTimer.stop();
-
-        // A stream that never answers costs a full timeout on every round, so while no
-        // TCP mapping has been learned yet the channel does not linger: anything that
-        // cannot report a public TCP port is no use to it, and a server that really is
-        // just slow can be picked up again on the next pass.
-        reportProbeFailure(Transport::Tcp, QStringLiteral("连接失败：%1").arg(reason), true);
-    }
-
-    void STUNManager::onTcpProbeTimeout()
-    {
-        if (!m_tcpSocket)
-            return;
-
-        if (m_tcpSocket->state() != QAbstractSocket::ConnectedState)
-        {
-            closeTcpProbe();
-            reportProbeFailure(Transport::Tcp, QStringLiteral("连接超时"), true);
-            return;
-        }
-
-        if (!m_tcpPending.active)
-            return;
-
-        m_tcpPending.active = false;
-
-        if (m_tcpServerAnswered)
-            return;
-
-        // The stream is up but the peer does not answer Binding Requests, so it cannot
-        // tell us the public TCP port - the only reason to keep a TCP channel at all.
-        ++m_tcpFailures;
-
-        if ((m_tcpMappedPort == 0) || (m_tcpFailures >= MAX_PROBE_FAILURES))
-        {
-            if (ServerEndpoint *endpoint = currentServer(Transport::Tcp))
-                endpoint->tcpRefused = true;
-
+            endpoint->tcpRefused = true;
             emit logMessage(QStringLiteral("STUN：服务器 [%1:%2] 不接受 TCP 上的 Binding 请求，"
                                            "无法读取 TCP 公网端口，换下一台。")
-                                .arg(m_tcpServerAddress.toString())
-                                .arg(m_tcpServerPort), true);
-            scheduleServerAdvance(Transport::Tcp);
-            return;
+                                .arg(endpoint->host)
+                                .arg(endpoint->port), true);
         }
 
-        if (!m_tcpUnsupportedWarned)
-        {
-            m_tcpUnsupportedWarned = true;
-            emit logMessage(QStringLiteral("STUN：服务器 [%1:%2] 未响应 TCP 上的 Binding 请求，"
-                                           "无法读取 TCP 公网端口（TCP 映射仍在维持）。")
-                                .arg(m_tcpServerAddress.toString())
-                                .arg(m_tcpServerPort), true);
-        }
+        scheduleServerAdvance(Transport::Tcp);
     }
 
     void STUNManager::reportProbeSuccess(Transport transport, const QHostAddress &ip, quint16 port)
