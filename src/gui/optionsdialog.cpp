@@ -964,6 +964,12 @@ void OptionsDialog::loadConnectionTabOptions()
     connect(m_ui->checkSTUNKeepAliveUDP, &QAbstractButton::toggled, this, &ThisType::enableApplyButton);
     connect(m_ui->checkSTUNKeepAliveTCP, &QAbstractButton::toggled, this, &ThisType::enableApplyButton);
 
+    connect(m_ui->btnRestoreSTUNServers, &QAbstractButton::clicked, this, [this]()
+    {
+        // The stored list outlives releases, so a build with a re-verified list cannot
+        // rely on the default reaching anybody who already saved the old one.
+        m_ui->textSTUNServers->setText(BitTorrent::STUNManager::DEFAULT_STUN_SERVERS.join(u';'));
+    });
     connect(m_ui->btnTestNATType, &QAbstractButton::clicked, this, [this]()
     {
         m_ui->lblNATTestResult->setText(tr("Testing NAT type (RFC 5780)..."));
@@ -1124,7 +1130,14 @@ void OptionsDialog::updateSTUNStatusDisplay()
     }
     else
     {
-        m_ui->lblSTUNEndpointValue->setText(tr("Probing in progress..."));
+        // A mapping can be known and still not advertised: its keepalive may be off, or
+        // the transport that would carry the announcement may not have answered yet.
+        // Reporting "probing" in that case hides the reason nothing is advertised.
+        const bool knownButNotKeptAlive = ((udpMappedPort > 0) && !session->isSTUNUdpKeepAliveEnabled())
+            || ((tcpMappedPort > 0) && !session->isSTUNTcpKeepAliveEnabled());
+        m_ui->lblSTUNEndpointValue->setText(knownButNotKeptAlive
+            ? tr("Not announced (the known mapping has its keepalive off)")
+            : tr("Probing in progress..."));
     }
 
     // The listening port is only extended to the announced port; this reports what is

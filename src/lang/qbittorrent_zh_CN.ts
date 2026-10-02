@@ -7223,6 +7223,18 @@ readme[0-9].txt ：筛选 “readme1.txt” 、“readme2.txt” 但不筛选 �
         <translation>TCP - 维持 TCP 映射存活 (需要服务器支持在 TCP 上应答 STUN)</translation>
     </message>
     <message>
+        <source>Restore Defaults</source>
+        <translation>恢复默认</translation>
+    </message>
+    <message>
+        <source>Fill in the built-in server list, verified against each server over UDP and TCP</source>
+        <translation>填入内置服务器列表（每台均已实测 UDP 与 TCP 可用性）</translation>
+    </message>
+    <message>
+        <source>Not announced (the known mapping has its keepalive off)</source>
+        <translation>未通告（已学到的映射未保活）</translation>
+    </message>
+    <message>
         <source>Transport Mappings:</source>
         <translation>传输通道映射：</translation>
     </message>

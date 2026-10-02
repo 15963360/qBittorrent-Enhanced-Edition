@@ -7223,6 +7223,18 @@ readme[0-9].txt：過濾「readme1.txt」、「readme2.txt」但不包含「read
         <translation>TCP - 維持 TCP 對應存活 (需要伺服器支援在 TCP 上回應 STUN)</translation>
     </message>
     <message>
+        <source>Restore Defaults</source>
+        <translation>恢復預設</translation>
+    </message>
+    <message>
+        <source>Fill in the built-in server list, verified against each server over UDP and TCP</source>
+        <translation>填入內建伺服器列表（每台均已實測 UDP 與 TCP 可用性）</translation>
+    </message>
+    <message>
+        <source>Not announced (the known mapping has its keepalive off)</source>
+        <translation>未通告（已學到的對應未保活）</translation>
+    </message>
+    <message>
         <source>Transport Mappings:</source>
         <translation>傳輸通道對應：</translation>
     </message>
