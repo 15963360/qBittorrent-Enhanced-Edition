@@ -49,6 +49,12 @@ namespace BitTorrent
         static constexpr int UDP_PROBE_TIMEOUT_MS = 900;
         static constexpr int MAX_PROBE_FAILURES = 3;
         static constexpr int NAT_TEST_TIMEOUT_MS = 1500;
+        // Failure pacing. Offline, a DNS miss and a refused connection both come back
+        // on the same event-loop turn, so the retry has to be slowed down by hand or
+        // the channel would walk the server list as fast as the event loop runs.
+        // These bound how far apart two attempts on the same transport may be.
+        static constexpr int RETRY_DELAY_MIN_MS = 500;
+        static constexpr int RETRY_DELAY_MAX_MS = 15000;
 
         explicit STUNManager(QObject *parent = nullptr);
         ~STUNManager() override;
@@ -119,6 +125,17 @@ namespace BitTorrent
     private:
         enum class Transport { Udp, Tcp };
 
+        // Retry pacing for one transport; see scheduleServerAdvance().
+        struct RetryState
+        {
+            // Failed attempts since the last success. Each one pushes the next
+            // attempt further away; reaching the length of the server list means
+            // nothing on it answered at all, which is reported once and then left
+            // alone.
+            int consecutiveFailures {0};
+            bool outageLogged {false};
+        };
+
         struct ServerEndpoint
         {
             QString host;
@@ -141,6 +158,13 @@ namespace BitTorrent
 
         void parseServerList();
         bool resolveEndpointSync(ServerEndpoint &endpoint);
+        RetryState &retryState(Transport transport);
+        const RetryState &retryState(Transport transport) const;
+        int retryDelayMs(Transport transport) const;
+        // Records one failed attempt. Returns true once a whole pass through the
+        // server list has failed without a single success, at which point the
+        // failure has been reported and the per-attempt detail stops.
+        bool recordFailedAttempt(Transport transport);
         int &serverIndex(Transport transport);
         ServerEndpoint *serverAt(int index);
         ServerEndpoint *currentServer(Transport transport);
@@ -176,6 +200,9 @@ namespace BitTorrent
         // every time the TCP channel rotated past them.
         int m_udpServerIndex {0};
         int m_tcpServerIndex {0};
+        // Retry pacing per transport, indexed by static_cast<int>(Transport): the two
+        // channels walk the server list on their own, so they slow down on their own.
+        RetryState m_retry[2];
         int m_keepAliveIntervalSec {DEFAULT_KEEPALIVE_INTERVAL_SEC};
 
         bool m_udpKeepAliveEnabled {true};

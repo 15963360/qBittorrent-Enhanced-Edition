@@ -414,6 +414,10 @@ namespace BitTorrent
         m_tcpFailures = 0;
         m_udpRotations = 0;
         m_udpUnconfirmedLogged = false;
+        // A (re)start is a fresh start: whatever the previous outage was, the log may
+        // chatter about it again.
+        for (RetryState &retry : m_retry)
+            retry = {};
 
         emit logMessage(QStringLiteral("STUN：保活已启动（本地端口 %1；UDP %2；TCP %3；周期 %4 秒）")
                             .arg(QString::number(m_localPort),
@@ -539,6 +543,55 @@ namespace BitTorrent
         return (transport == Transport::Udp) ? m_udpServerIndex : m_tcpServerIndex;
     }
 
+    STUNManager::RetryState &STUNManager::retryState(Transport transport)
+    {
+        return m_retry[static_cast<int>(transport)];
+    }
+
+    const STUNManager::RetryState &STUNManager::retryState(Transport transport) const
+    {
+        return m_retry[static_cast<int>(transport)];
+    }
+
+    int STUNManager::retryDelayMs(Transport transport) const
+    {
+        const int failures = retryState(transport).consecutiveFailures;
+
+        int delayMs = RETRY_DELAY_MIN_MS;
+        for (int i = 1; i < failures; ++i)
+        {
+            delayMs *= 2;
+            if (delayMs >= RETRY_DELAY_MAX_MS)
+                break;
+        }
+
+        return qMin(delayMs, RETRY_DELAY_MAX_MS);
+    }
+
+    bool STUNManager::recordFailedAttempt(Transport transport)
+    {
+        RetryState &retry = retryState(transport);
+        ++retry.consecutiveFailures;
+
+        // A whole pass through the list without a single success is not a rotation
+        // problem any more: either the network is gone, or every server on the list
+        // is. That is said once, and the per-attempt detail stops with it - repeating
+        // the same two lines for every server of every pass is exactly what made an
+        // outage flood the execution log.
+        if (m_servers.isEmpty() || (retry.consecutiveFailures < m_servers.size()))
+            return false;
+
+        if (!retry.outageLogged)
+        {
+            retry.outageLogged = true;
+            emit logMessage(QStringLiteral("STUN：所有服务器均未响应（网络可能已断开），%1 通道改为每 %2 秒重试一次。")
+                                .arg(transportName(transport))
+                                .arg(RETRY_DELAY_MAX_MS / 1000), true);
+        }
+
+        return true;
+    }
+
     STUNManager::ServerEndpoint *STUNManager::serverAt(int index)
     {
         if ((index < 0) || (index >= m_servers.size()))
@@ -647,8 +700,11 @@ namespace BitTorrent
         const QHostAddress address = firstIPv4Address(hostInfo);
         if (address.isNull())
         {
-            emit logMessage(QStringLiteral("STUN：解析服务器 [%1] 失败：%2，切换下一台。")
-                                .arg(host, hostInfo.errorString()), true);
+            if (!recordFailedAttempt(transport))
+            {
+                emit logMessage(QStringLiteral("STUN：解析服务器 [%1] 失败：%2，切换下一台。")
+                                    .arg(host, hostInfo.errorString()), true);
+            }
             scheduleServerAdvance(transport);
             return;
         }
@@ -687,11 +743,14 @@ namespace BitTorrent
             // Either a single server is configured, or every alternative is known to be
             // unusable for this transport. Say that rather than claim a switch that did
             // not happen.
-            emit logMessage(QStringLiteral("STUN：%1 保活连续失败，但没有其它可用服务器，继续重试 [%2:%3]。")
-                                .arg(transportName(transport), endpoint.host)
-                                .arg(endpoint.port), true);
+            if (!retryState(transport).outageLogged)
+            {
+                emit logMessage(QStringLiteral("STUN：%1 保活连续失败，但没有其它可用服务器，继续重试 [%2:%3]。")
+                                    .arg(transportName(transport), endpoint.host)
+                                    .arg(endpoint.port), true);
+            }
         }
-        else
+        else if (!retryState(transport).outageLogged)
         {
             emit logMessage(QStringLiteral("STUN：%1 保活连续失败，切换到备用服务器 [%2:%3]。")
                                 .arg(transportName(transport), endpoint.host)
@@ -717,7 +776,15 @@ namespace BitTorrent
     {
         // Deferred: rotating the server destroys sockets, and doing that from inside a
         // socket's own signal handler is not safe.
-        QTimer::singleShot(0, this, [this, transport]() { advanceServer(transport); });
+        //
+        // Delayed as well. Offline, a DNS lookup answers "Host not found" and a TCP
+        // connect is refused, neither of which waits for a timeout, so an undelayed
+        // rotation would walk the whole server list as fast as the event loop runs:
+        // the main thread would never be idle - the entire program stalls - and every
+        // turn of that loop adds a couple of lines to the execution log. The delay
+        // doubles with each consecutive failure up to a cap and is forgotten as soon
+        // as a server answers.
+        QTimer::singleShot(retryDelayMs(transport), this, [this, transport]() { advanceServer(transport); });
     }
 
     void STUNManager::refreshStatus()
@@ -914,7 +981,12 @@ namespace BitTorrent
             {
                 ++m_udpRotations;
                 m_udpFailures = 0;
-                emit logMessage(QStringLiteral("STUN：UDP 保活报文已从监听端口发出但未收到回包，换一台服务器试试。"), true);
+                // Counted like any other failed attempt, so the walk slows down and
+                // goes quiet once the whole list has been tried in vain.
+                if (!recordFailedAttempt(Transport::Udp))
+                {
+                    emit logMessage(QStringLiteral("STUN：UDP 保活报文已从监听端口发出但未收到回包，换一台服务器试试。"), true);
+                }
                 scheduleServerAdvance(Transport::Udp);
             }
             return;
@@ -954,10 +1026,13 @@ namespace BitTorrent
         if (ServerEndpoint *endpoint = currentServer(Transport::Tcp))
         {
             endpoint->tcpRefused = true;
-            emit logMessage(QStringLiteral("STUN：服务器 [%1:%2] 不接受 TCP 上的 Binding 请求，"
-                                           "无法读取 TCP 公网端口，换下一台。")
-                                .arg(endpoint->host)
-                                .arg(endpoint->port), true);
+            if (!retryState(Transport::Tcp).outageLogged)
+            {
+                emit logMessage(QStringLiteral("STUN：服务器 [%1:%2] 不接受 TCP 上的 Binding 请求，"
+                                               "无法读取 TCP 公网端口，换下一台。")
+                                    .arg(endpoint->host)
+                                    .arg(endpoint->port), true);
+            }
         }
 
         scheduleServerAdvance(Transport::Tcp);
@@ -984,6 +1059,10 @@ namespace BitTorrent
             m_tcpFailures = 0;
         }
 
+        // The channel is working again: forget the outage, so the delay is back to
+        // zero and the detail lines are logged once more.
+        retryState(transport) = {};
+
         if (changed)
         {
             emit logMessage(QStringLiteral("STUN：%1 公网映射 %2:%3（本地端口 %4）")
@@ -1001,9 +1080,14 @@ namespace BitTorrent
         int &failures = (transport == Transport::Udp) ? m_udpFailures : m_tcpFailures;
         ++failures;
 
-        emit logMessage(QStringLiteral("STUN：%1 保活失败（%2），连续 %3 次。")
-                            .arg(transportName(transport), reason)
-                            .arg(failures), true);
+        // While the outage line is the loudest thing left to say, the detail stops;
+        // it would repeat the same fact for every server of every further pass.
+        if (!recordFailedAttempt(transport))
+        {
+            emit logMessage(QStringLiteral("STUN：%1 保活失败（%2），连续 %3 次。")
+                                .arg(transportName(transport), reason)
+                                .arg(failures), true);
+        }
 
         // A UDP heartbeat that was merely not answered is ambiguous (the reply may have
         // gone to libtorrent's socket), so it takes MAX_PROBE_FAILURES rounds before the
