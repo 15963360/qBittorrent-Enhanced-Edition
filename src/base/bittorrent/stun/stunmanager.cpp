@@ -3,6 +3,7 @@
 #include <QDateTime>
 #include <QElapsedTimer>
 #include <QNetworkDatagram>
+#include <QNetworkProxy>
 
 namespace
 {
@@ -898,6 +899,7 @@ namespace BitTorrent
         closeUdpProbe();
 
         m_udpProbe = std::make_unique<QUdpSocket>();
+        m_udpProbe->setProxy(QNetworkProxy::NoProxy);
         connect(m_udpProbe.get(), &QUdpSocket::readyRead, this, &STUNManager::onUdpProbeReadyRead);
 
         if (!bindToLocalPort(*m_udpProbe))
@@ -1168,6 +1170,7 @@ namespace BitTorrent
             }
 
             QUdpSocket probeSocket;
+            probeSocket.setProxy(QNetworkProxy::NoProxy);
             if (!probeSocket.bind(QHostAddress::AnyIPv4, m_localPort,
                                   QUdpSocket::ShareAddress | QUdpSocket::ReuseAddressHint))
             {
@@ -1366,7 +1369,9 @@ namespace BitTorrent
                 else
                 {
                     detectedType = NATType::UdpBlocked;
-                    detectedDetails = QStringLiteral("所有 STUN 服务器均无响应，UDP 可能被运营商阻断");
+                    detectedDetails = QStringLiteral("所有 STUN 服务器在 UDP 上均未回应"
+                                                   "（所选服务器可能仅支持 TCP，也可能 UDP 被运营商阻断），"
+                                                   "无法判定 NAT 类型");
                 }
             }
 

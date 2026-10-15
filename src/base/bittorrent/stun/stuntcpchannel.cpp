@@ -1,6 +1,7 @@
 #include "stuntcpchannel.h"
 
 #include <QtEndian>
+#include <QNetworkProxy>
 
 namespace
 {
@@ -93,6 +94,12 @@ namespace BitTorrent
         closeSocket();
 
         m_socket = std::make_unique<QTcpSocket>();
+        // Qt refuses to bind a TCP socket at all while a system or application proxy
+        // is configured: QNativeSocketEngine::checkProxy() fails the bind with
+        // "Unsupported socket operation" before any syscall runs. The keepalive also
+        // has to travel the direct path - the mapping a proxy exit would report is
+        // not the one peers use to reach the listening port.
+        m_socket->setProxy(QNetworkProxy::NoProxy);
         connect(m_socket.get(), &QTcpSocket::connected, this, &STUNTcpChannel::onConnected);
         connect(m_socket.get(), &QTcpSocket::readyRead, this, &STUNTcpChannel::onReadyRead);
         connect(m_socket.get(), &QTcpSocket::errorOccurred, this, &STUNTcpChannel::onSocketError);
