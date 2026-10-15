@@ -636,6 +636,12 @@ SessionImpl::SessionImpl(QObject *parent)
             processTorrentShareLimits(torrent);
     });
 
+    // UDP 与 TCP 保活互斥：一次只运行选中开关对应的那条通道。旧配置里两个
+    // 开关同时为真的情况在此归一为 TCP（通告端口以 TCP 映射为准），正常配置
+    // 不受影响。
+    if (m_stunUdpKeepAliveEnabled && m_stunTcpKeepAliveEnabled)
+        m_stunUdpKeepAliveEnabled = false;
+
     m_stunManager = std::make_unique<STUNManager>(this);
     m_stunManager->setLocalPort(static_cast<quint16>(port()));
     m_stunManager->setStunServers(m_stunServers.get().split(u';', Qt::SkipEmptyParts));
@@ -5142,6 +5148,15 @@ void SessionImpl::setSTUNUdpKeepAliveEnabled(const bool enabled)
     if (enabled != m_stunUdpKeepAliveEnabled)
     {
         m_stunUdpKeepAliveEnabled = enabled;
+
+        // 互斥：启用 UDP 即关闭 TCP。
+        if (enabled)
+        {
+            m_stunTcpKeepAliveEnabled = false;
+            if (m_stunManager)
+                m_stunManager->setTcpKeepAliveEnabled(false);
+        }
+
         if (m_stunManager)
             m_stunManager->setUdpKeepAliveEnabled(enabled);
     }
@@ -5157,6 +5172,15 @@ void SessionImpl::setSTUNTcpKeepAliveEnabled(const bool enabled)
     if (enabled != m_stunTcpKeepAliveEnabled)
     {
         m_stunTcpKeepAliveEnabled = enabled;
+
+        // 互斥：启用 TCP 即关闭 UDP。
+        if (enabled)
+        {
+            m_stunUdpKeepAliveEnabled = false;
+            if (m_stunManager)
+                m_stunManager->setUdpKeepAliveEnabled(false);
+        }
+
         if (m_stunManager)
             m_stunManager->setTcpKeepAliveEnabled(enabled);
     }

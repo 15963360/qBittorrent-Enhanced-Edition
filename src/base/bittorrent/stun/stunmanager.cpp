@@ -284,6 +284,11 @@ namespace BitTorrent
         if (m_udpKeepAliveEnabled == enabled)
             return;
 
+        // 互斥：启用一边即停掉另一边的通道。其后的 updateAnnouncedEndpoint()/
+        // restart() 覆盖两边的状态变化，最终只发生一次重启。
+        if (enabled)
+            disableTcpTransport();
+
         m_udpKeepAliveEnabled = enabled;
 
         if (!enabled)
@@ -314,6 +319,9 @@ namespace BitTorrent
         if (m_tcpKeepAliveEnabled == enabled)
             return;
 
+        if (enabled)
+            disableUdpTransport();
+
         m_tcpKeepAliveEnabled = enabled;
 
         if (!enabled)
@@ -327,6 +335,27 @@ namespace BitTorrent
 
         if (m_enabled)
             restart();
+    }
+
+    void STUNManager::disableUdpTransport()
+    {
+        if (!m_udpKeepAliveEnabled)
+            return;
+
+        m_udpKeepAliveEnabled = false;
+        m_udpFailures = 0;
+        closeUdpProbe();
+        m_udpProbeTimer.stop();
+    }
+
+    void STUNManager::disableTcpTransport()
+    {
+        if (!m_tcpKeepAliveEnabled)
+            return;
+
+        m_tcpKeepAliveEnabled = false;
+        m_tcpFailures = 0;
+        m_tcpChannel.stop();
     }
 
     STUNStatus STUNManager::status() const
@@ -1111,6 +1140,16 @@ namespace BitTorrent
 
     bool STUNManager::discoverMappedPortSync(int timeoutMs)
     {
+        // The probe speaks UDP only. Whichever transport the user has switched on is
+        // the one whose mapping matters: with TCP selected, the TCP channel maps the
+        // port on start(), and this UDP walk would do nothing but report every server
+        // as unresponsive - loudest of all a server that answers on TCP. Even with UDP
+        // selected, on Windows this probe cannot receive the replies while libtorrent's
+        // socket holds the same port (see startUdpProbe()); it still refreshes the
+        // carrier binding, which is what makes it worth running.
+        if (!m_udpKeepAliveEnabled)
+            return false;
+
         if (m_servers.isEmpty())
             parseServerList();
 

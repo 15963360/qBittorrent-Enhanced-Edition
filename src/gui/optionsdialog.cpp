@@ -851,6 +851,9 @@ void OptionsDialog::loadConnectionTabOptions()
     m_ui->spinSTUNKeepAlive->setValue(session->stunKeepAliveInterval());
     m_ui->checkSTUNKeepAliveUDP->setChecked(session->isSTUNUdpKeepAliveEnabled());
     m_ui->checkSTUNKeepAliveTCP->setChecked(session->isSTUNTcpKeepAliveEnabled());
+    // One keepalive transport at a time; a legacy config with both on keeps TCP.
+    if (m_ui->checkSTUNKeepAliveTCP->isChecked())
+        m_ui->checkSTUNKeepAliveUDP->setChecked(false);
     m_ui->lblNATTestResult->setText(BitTorrent::natTypeToString(session->stunNATType()));
     updateSTUNStatusDisplay();
 
@@ -961,8 +964,20 @@ void OptionsDialog::loadConnectionTabOptions()
     connect(m_ui->checkSTUN, &QAbstractButton::toggled, this, &ThisType::enableApplyButton);
     connect(m_ui->textSTUNServers, &QLineEdit::textChanged, this, &ThisType::enableApplyButton);
     connect(m_ui->spinSTUNKeepAlive, qSpinBoxValueChanged, this, &ThisType::enableApplyButton);
-    connect(m_ui->checkSTUNKeepAliveUDP, &QAbstractButton::toggled, this, &ThisType::enableApplyButton);
-    connect(m_ui->checkSTUNKeepAliveTCP, &QAbstractButton::toggled, this, &ThisType::enableApplyButton);
+    // The two keepalive transports are mutually exclusive: checking one unchecks the
+    // other, because only one mapping is ever announced to trackers.
+    connect(m_ui->checkSTUNKeepAliveUDP, &QAbstractButton::toggled, this, [this](bool on)
+    {
+        if (on)
+            m_ui->checkSTUNKeepAliveTCP->setChecked(false);
+        enableApplyButton();
+    });
+    connect(m_ui->checkSTUNKeepAliveTCP, &QAbstractButton::toggled, this, [this](bool on)
+    {
+        if (on)
+            m_ui->checkSTUNKeepAliveUDP->setChecked(false);
+        enableApplyButton();
+    });
 
     connect(m_ui->btnRestoreSTUNServers, &QAbstractButton::clicked, this, [this]()
     {

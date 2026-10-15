@@ -71,9 +71,11 @@ namespace BitTorrent
         int keepAliveInterval() const;
         void setKeepAliveInterval(int seconds);
 
-        // Carrier-grade NAT allocates the UDP and the TCP binding independently, so a
-        // STUN binding only refreshes the transport it was sent over. Each transport
-        // therefore has its own keepalive channel and its own switch.
+        // The two transports are mutually exclusive: exactly one keepalive channel
+        // runs at a time - the one whose switch is on - and enabling one switch turns
+        // the other off. Only one of the two mappings is ever announced (a tracker
+        // announce carries a single port), so a second running channel would spend
+        // probes on a port nothing can be routed to through the announce.
         bool isUdpKeepAliveEnabled() const;
         void setUdpKeepAliveEnabled(bool enabled);
         bool isTcpKeepAliveEnabled() const;
@@ -184,6 +186,12 @@ namespace BitTorrent
 
         void abortProbes();
         void stopInternal(bool disabledByUser);
+
+        // Mutual-exclusion halves: stop one transport's channel and clear its flag -
+        // without touching the announced endpoint or the restart, which the transport
+        // setters that call these handle afterwards.
+        void disableUdpTransport();
+        void disableTcpTransport();
 
         bool bindToLocalPort(QAbstractSocket &socket) const;
         void reportProbeSuccess(Transport transport, const QHostAddress &ip, quint16 port);
